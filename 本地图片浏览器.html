@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本地图片浏览器</title>
+    <style>
+        :root {
+            --primary-color: #5d7db9;
+            --secondary-color: #8aa7d6;
+            --accent-color: #ff8a65;
+            --light-color: #f9fbfd;
+            --dark-color: #2c3e50;
+            --border-color: #e1e8ed;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: var(--light-color);
+            color: var(--dark-color);
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            font-size: 2.4rem;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 15px; /* Reduced margin to fit breadcrumb */
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            align-items: center;
+        }
+        
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        button:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+        }
+        
+        button.active {
+            background-color: var(--accent-color);
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+        
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        
+        .search-box {
+            flex-grow: 1;
+            min-width: 200px;
+        }
+        
+        input[type="text"], select {
+            width: 100%;
+            padding: 10px 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        
+        .view-options {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .image-counter {
+            margin-left: auto;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        /* 面包屑导航样式 */
+        .breadcrumb-bar {
+            display: none; /* 默认隐藏，进入文件夹时显示 */
+            padding: 10px 20px;
+            margin-bottom: 20px;
+            background: #eef2f7;
+            border-radius: 8px;
+            font-size: 1rem;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .breadcrumb-bar.visible {
+            display: flex;
+        }
+
+        .breadcrumb-item {
+            color: var(--primary-color);
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .breadcrumb-item:hover {
+            text-decoration: underline;
+        }
+
+        .breadcrumb-separator {
+            color: #999;
+        }
+
+        .breadcrumb-current {
+            color: var(--dark-color);
+            font-weight: normal;
+        }
+        
+        .masonry-grid {
+            column-count: 4;
+            column-gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        @media (max-width: 1200px) {
+            .masonry-grid {
+                column-count: 3;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .masonry-grid {
+                column-count: 2;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .image-counter {
+                margin-left: 0;
+                text-align: center;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .masonry-grid {
+                column-count: 1;
+            }
+        }
+        
+        .image-item {
+            break-inside: avoid;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+            background: white;
+        }
+        
+        .image-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+        }
+        
+        .image-item img {
+            width: 100%;
+            height: auto;
+            display: block;
+            cursor: pointer;
+            transition: transform 0.5s;
+        }
+        
+        .image-item:hover img {
+            transform: scale(1.03);
+        }
+        
+        .image-info {
+            padding: 12px;
+            font-size: 0.9rem;
+        }
+        
+        .image-name {
+            font-weight: 600;
+            margin-bottom: 5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .image-path {
+            font-size: 0.8rem;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .folder-view {
+            display: none;
+        }
+        
+        .folder-item {
+            margin-bottom: 20px;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+        }
+        
+        .folder-header {
+            padding: 15px 20px;
+            background-color: #f0f4f8;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background-color 0.2s;
+        }
+
+        .folder-header:hover {
+            background-color: #e1eaf3;
+        }
+
+        .folder-header:hover .folder-name {
+            text-decoration: underline;
+        }
+        
+        .folder-name {
+            font-weight: 600;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .folder-icon {
+            font-size: 1.2rem;
+        }
+        
+        .folder-images {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+            padding: 15px;
+        }
+        
+        .folder-image {
+            border-radius: 6px;
+            overflow: hidden;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            aspect-ratio: 1; /* 保持正方形缩略图 */
+        }
+        
+        .folder-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* 填充正方形 */
+            display: block;
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+
+        .folder-image:hover img {
+            transform: scale(1.1);
+        }
+        
+        .fullscreen-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            user-select: none;
+        }
+        
+        .fullscreen-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+        
+        .fullscreen-image-wrapper {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .fullscreen-image-wrapper img {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+            transition: transform 0.1s ease-out;
+            transform-origin: center;
+        }
+
+        .fullscreen-image-wrapper img.zoomed {
+            cursor: grab;
+            max-width: none;
+            max-height: none;
+            object-fit: unset;
+        }
+
+        .fullscreen-image-wrapper img.zoomed:active {
+            cursor: grabbing;
+        }
+
+        .fullscreen-image-wrapper img:not(.zoomed) {
+            cursor: zoom-in;
+        }
+        
+        .fullscreen-info {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            text-align: center;
+            pointer-events: none;
+            z-index: 1002;
+        }
+        
+        .close-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+            z-index: 1001;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background 0.3s, transform 0.3s;
+            outline: none;
+        }
+        
+        .close-btn:hover {
+            background: rgba(0, 0, 0, 0.8);
+            transform: rotate(90deg) !important;
+        }
+        
+        .nav-btn {
+            position: fixed;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            color: white;
+            font-size: 2rem;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background 0.3s, transform 0.3s;
+            z-index: 1001;
+            outline: none;
+        }
+        
+        .nav-btn:hover {
+            background: rgba(0, 0, 0, 0.8);
+            transform: translateY(-50%) scale(1.1) !important;
+        }
+        
+        .prev-btn {
+            left: 20px;
+        }
+        
+        .next-btn {
+            right: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: var(--primary-color);
+            font-size: 1.1rem;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #ccc;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        body.fullscreen-active {
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>本地图片浏览器</h1>
+        <p class="subtitle">选择本地文件夹，浏览和管理您的图片收藏</p>
+    </header>
+    
+    <div class="controls">
+        <div class="file-input-wrapper">
+            <button>
+                <i>📁</i> 选择图片文件夹
+            </button>
+            <input type="file" id="folderInput" webkitdirectory directory multiple>
+        </div>
+        
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="搜索图片名称..." disabled>
+        </div>
+        
+        <select id="sortSelect" disabled>
+            <option value="name">按名称排序</option>
+            <option value="random">随机排序</option>
+            <option value="date">按日期排序</option>
+        </select>
+        
+        <div class="view-options">
+            <button id="gridViewBtn" class="active" disabled>
+                <i>🖼️</i> 网格视图
+            </button>
+            <button id="folderViewBtn" disabled>
+                <i>📂</i> 文件夹视图
+            </button>
+        </div>
+        
+        <div class="image-counter">
+            已加载 <span id="imageCount">0</span> 张图片
+        </div>
+    </div>
+
+    <div id="breadcrumbBar" class="breadcrumb-bar">
+        <span class="breadcrumb-item" id="breadcrumbAll">全部图片</span>
+        <span class="breadcrumb-separator">></span>
+        <span class="breadcrumb-current" id="breadcrumbFolder">当前文件夹</span>
+    </div>
+    
+    <div id="masonryView" class="masonry-grid">
+        </div>
+    
+    <div id="folderView" class="folder-view">
+        </div>
+    
+    <div id="loadingIndicator" class="loading hidden">
+        <p>加载更多图片中...</p>
+    </div>
+    
+    <div id="emptyState" class="empty-state">
+        <i>📷</i>
+        <h3>暂无图片</h3>
+        <p>请选择一个包含图片的文件夹开始浏览</p>
+    </div>
+    
+    <div class="fullscreen-overlay" id="fullscreenOverlay">
+        <button class="close-btn" id="closeFullscreen" title="关闭 (Esc)">×</button>
+        <button class="nav-btn prev-btn" id="prevBtn" title="上一张 (←)">‹</button>
+        <button class="nav-btn next-btn" id="nextBtn" title="下一张 (→)">›</button>
+        <div class="fullscreen-container">
+            <div class="fullscreen-image-wrapper" id="imageWrapper">
+                <img id="fullscreenImage" src="" alt="全屏图片" draggable="false">
+            </div>
+            <div class="fullscreen-info">
+                <p id="fullscreenCaption"></p>
+                <p style="font-size: 0.8rem; opacity: 0.8; margin-top: 5px;">
+                    (单击切换100% / 滚动缩放 / 拖拽移动)
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 状态管理
+        let state = {
+            images: [],
+            filteredImages: [],
+            currentView: 'grid', // 'grid' or 'folder'
+            activeFolder: null,  // 当前进入的特定文件夹，null 表示查看所有
+            sortBy: 'name',
+            searchQuery: '',
+            currentPage: 1,
+            itemsPerPage: 12,
+            fullscreenIndex: 0
+        };
+
+        // 缩放和拖拽状态
+        let zoomState = {
+            isZoomed: false,
+            scale: 1,
+            panning: false,
+            pointX: 0,
+            pointY: 0,
+            translateX: 0,
+            translateY: 0,
+            hasMoved: false
+        };
+
+        // DOM 元素
+        const elements = {
+            folderInput: document.getElementById('folderInput'),
+            searchInput: document.getElementById('searchInput'),
+            sortSelect: document.getElementById('sortSelect'),
+            gridViewBtn: document.getElementById('gridViewBtn'),
+            folderViewBtn: document.getElementById('folderViewBtn'),
+            masonryView: document.getElementById('masonryView'),
+            folderView: document.getElementById('folderView'),
+            breadcrumbBar: document.getElementById('breadcrumbBar'),
+            breadcrumbAll: document.getElementById('breadcrumbAll'),
+            breadcrumbFolder: document.getElementById('breadcrumbFolder'),
+            imageCount: document.getElementById('imageCount'),
+            loadingIndicator: document.getElementById('loadingIndicator'),
+            emptyState: document.getElementById('emptyState'),
+            fullscreenOverlay: document.getElementById('fullscreenOverlay'),
+            imageWrapper: document.getElementById('imageWrapper'),
+            fullscreenImage: document.getElementById('fullscreenImage'),
+            fullscreenCaption: document.getElementById('fullscreenCaption'),
+            closeFullscreen: document.getElementById('closeFullscreen'),
+            prevBtn: document.getElementById('prevBtn'),
+            nextBtn: document.getElementById('nextBtn')
+        };
+
+        // 初始化
+        function init() {
+            state.images = [];
+            state.filteredImages = [];
+            renderImages();
+            setupEventListeners();
+        }
+
+        // 设置事件监听器
+        function setupEventListeners() {
+            // 文件夹选择
+            elements.folderInput.addEventListener('change', handleFolderSelect);
+            
+            // 搜索
+            elements.searchInput.addEventListener('input', debounce(() => {
+                state.searchQuery = elements.searchInput.value;
+                filterAndSortImages();
+                renderImages();
+            }, 300));
+            
+            // 排序
+            elements.sortSelect.addEventListener('change', () => {
+                state.sortBy = elements.sortSelect.value;
+                filterAndSortImages();
+                renderImages();
+            });
+            
+            // 视图切换 (点击顶部按钮视为重置到查看所有)
+            elements.gridViewBtn.addEventListener('click', () => {
+                state.activeFolder = null; // 重置文件夹过滤
+                switchView('grid');
+            });
+            elements.folderViewBtn.addEventListener('click', () => {
+                state.activeFolder = null; // 重置文件夹过滤
+                switchView('folder');
+            });
+            
+            // 面包屑导航点击
+            elements.breadcrumbAll.addEventListener('click', () => {
+                state.activeFolder = null;
+                // 返回到之前的视图模式，通常是文件夹视图或总网格视图
+                // 这里逻辑：如果之前是在文件夹里，点击返回通常是回到文件夹列表
+                switchView('folder'); 
+            });
+
+            // 全屏查看与交互
+            elements.closeFullscreen.addEventListener('click', closeFullscreen);
+            elements.prevBtn.addEventListener('click', (e) => { e.stopPropagation(); showPrevImage(); });
+            elements.nextBtn.addEventListener('click', (e) => { e.stopPropagation(); showNextImage(); });
+            
+            elements.fullscreenOverlay.addEventListener('click', (e) => {
+                if (e.target === elements.fullscreenOverlay || e.target === elements.imageWrapper) {
+                    closeFullscreen();
+                }
+            });
+            
+            setupImageInteractions();
+
+            // 无限滚动
+            window.addEventListener('scroll', debounce(() => {
+                if (isScrolledToBottom() && state.currentPage * state.itemsPerPage < state.filteredImages.length) {
+                    loadMoreImages();
+                }
+            }, 200));
+            
+            // 键盘导航
+            document.addEventListener('keydown', (e) => {
+                if (elements.fullscreenOverlay.style.display === 'flex') {
+                    if (e.key === 'Escape') closeFullscreen();
+                    if (e.key === 'ArrowLeft') showPrevImage();
+                    if (e.key === 'ArrowRight') showNextImage();
+                }
+            });
+        }
+
+        // 设置图片缩放和拖拽交互
+        function setupImageInteractions() {
+            const img = elements.fullscreenImage;
+            const wrapper = elements.imageWrapper;
+
+            img.addEventListener('click', (e) => {
+                if (zoomState.hasMoved) {
+                    zoomState.hasMoved = false;
+                    return;
+                }
+                toggleZoom(e);
+            });
+
+            wrapper.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                let newScale = zoomState.scale * delta;
+                if (newScale < 0.1) newScale = 0.1;
+                if (newScale > 10) newScale = 10;
+                zoomState.scale = newScale;
+                enableZoomMode();
+                updateImageTransform();
+            }, { passive: false });
+
+            img.addEventListener('mousedown', (e) => {
+                if (!zoomState.isZoomed && zoomState.scale <= 1) return;
+                e.preventDefault();
+                zoomState.panning = true;
+                zoomState.pointX = e.clientX - zoomState.translateX;
+                zoomState.pointY = e.clientY - zoomState.translateY;
+                zoomState.hasMoved = false;
+                img.style.cursor = 'grabbing';
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!zoomState.panning) return;
+                e.preventDefault();
+                const newX = e.clientX - zoomState.pointX;
+                const newY = e.clientY - zoomState.pointY;
+                if (Math.abs(newX - zoomState.translateX) > 2 || Math.abs(newY - zoomState.translateY) > 2) {
+                    zoomState.hasMoved = true;
+                }
+                zoomState.translateX = newX;
+                zoomState.translateY = newY;
+                updateImageTransform();
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (zoomState.panning) {
+                    zoomState.panning = false;
+                    img.style.cursor = zoomState.isZoomed || zoomState.scale > 1 ? 'grab' : 'zoom-in';
+                }
+            });
+        }
+
+        function toggleZoom(e) {
+            if (zoomState.isZoomed) {
+                resetZoom();
+            } else {
+                zoomState.isZoomed = true;
+                zoomState.scale = 1;
+                zoomState.translateX = 0;
+                zoomState.translateY = 0;
+                enableZoomMode();
+                updateImageTransform();
+            }
+        }
+
+        function enableZoomMode() {
+            elements.fullscreenImage.classList.add('zoomed');
+        }
+
+        function resetZoom() {
+            zoomState.isZoomed = false;
+            zoomState.scale = 1;
+            zoomState.translateX = 0;
+            zoomState.translateY = 0;
+            elements.fullscreenImage.classList.remove('zoomed');
+            elements.fullscreenImage.style.transform = '';
+        }
+
+        function updateImageTransform() {
+            if (elements.fullscreenImage.classList.contains('zoomed')) {
+                 elements.fullscreenImage.style.transform = 
+                    `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`;
+            }
+        }
+
+        // 处理文件夹选择
+        function handleFolderSelect(event) {
+            const files = Array.from(event.target.files);
+            const imageFiles = files.filter(file => file.type.startsWith('image/'));
+            
+            if (imageFiles.length === 0) {
+                alert('所选文件夹中没有找到图片文件');
+                return;
+            }
+            
+            elements.searchInput.disabled = false;
+            elements.sortSelect.disabled = false;
+            elements.gridViewBtn.disabled = false;
+            elements.folderViewBtn.disabled = false;
+            
+            state.images = imageFiles.map((file, index) => {
+                const path = file.webkitRelativePath || file.name;
+                const pathParts = path.split('/');
+                const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '根目录';
+                
+                return {
+                    name: file.name,
+                    path: path,
+                    folder: folder,
+                    date: new Date(file.lastModified).toISOString().split('T')[0],
+                    file: file,
+                    url: URL.createObjectURL(file)
+                };
+            });
+            
+            state.activeFolder = null;
+            state.currentPage = 1;
+            filterAndSortImages();
+            renderImages();
+        }
+
+        // 进入特定文件夹
+        function enterFolder(folderName) {
+            state.activeFolder = folderName;
+            state.searchQuery = ''; // 清空搜索，或者保留看需求，通常进入文件夹想看所有的
+            elements.searchInput.value = '';
+            
+            switchView('grid'); // 强制切换到网格视图
+        }
+
+        // 过滤和排序图片
+        function filterAndSortImages() {
+            let sourceImages = state.images;
+
+            // 1. 首先按文件夹过滤（如果激活了特定文件夹）
+            if (state.activeFolder) {
+                sourceImages = sourceImages.filter(img => img.folder === state.activeFolder);
+            }
+
+            // 2. 然后按搜索关键词过滤
+            state.filteredImages = sourceImages.filter(img => 
+                img.name.toLowerCase().includes(state.searchQuery.toLowerCase()) ||
+                img.path.toLowerCase().includes(state.searchQuery.toLowerCase())
+            );
+            
+            // 3. 排序
+            switch (state.sortBy) {
+                case 'name':
+                    state.filteredImages.sort((a, b) => a.name.localeCompare(b.name));
+                    break;
+                case 'date':
+                    state.filteredImages.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    break;
+                case 'random':
+                    for (let i = state.filteredImages.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [state.filteredImages[i], state.filteredImages[j]] = [state.filteredImages[j], state.filteredImages[i]];
+                    }
+                    break;
+            }
+        }
+
+        // 切换视图
+        function switchView(view) {
+            state.currentView = view;
+            state.currentPage = 1;
+            
+            // 重新计算过滤（因为可能刚刚退出了 activeFolder）
+            filterAndSortImages();
+
+            // 更新面包屑
+            updateBreadcrumb();
+            
+            // 更新按钮状态
+            // 如果在 activeFolder 模式下，虽然是 grid 布局，但顶部按钮不应显示选中状态，以免混淆
+            if (state.activeFolder) {
+                elements.gridViewBtn.classList.remove('active');
+                elements.folderViewBtn.classList.remove('active');
+            } else {
+                elements.gridViewBtn.classList.toggle('active', view === 'grid');
+                elements.folderViewBtn.classList.toggle('active', view === 'folder');
+            }
+            
+            // 显示/隐藏视图
+            elements.masonryView.style.display = view === 'grid' ? 'block' : 'none';
+            elements.folderView.style.display = view === 'folder' ? 'block' : 'none';
+            
+            // 重新渲染
+            renderImages();
+        }
+
+        // 更新面包屑导航
+        function updateBreadcrumb() {
+            if (state.activeFolder) {
+                elements.breadcrumbBar.classList.add('visible');
+                elements.breadcrumbFolder.textContent = state.activeFolder;
+                // 在文件夹模式下，顶部视图按钮禁用或视觉上变灰可能更好，但这里我们保持启用作为"Reset"手段
+            } else {
+                elements.breadcrumbBar.classList.remove('visible');
+            }
+        }
+
+        // 渲染图片
+        function renderImages() {
+            const visibleImages = state.filteredImages.slice(0, state.currentPage * state.itemsPerPage);
+            
+            if (visibleImages.length === 0) {
+                elements.emptyState.classList.remove('hidden');
+                elements.masonryView.classList.add('hidden');
+                elements.folderView.classList.add('hidden');
+                elements.imageCount.textContent = '0';
+                return;
+            }
+            
+            elements.emptyState.classList.add('hidden');
+            elements.imageCount.textContent = visibleImages.length;
+            
+            if (state.currentView === 'grid') {
+                renderGridView(visibleImages);
+            } else {
+                // 在文件夹视图中，我们传递所有过滤后的图片，但在内部进行分组
+                // 注意：如果是 activeFolder 模式，逻辑上不会进入 renderFolderView
+                renderFolderView(state.filteredImages); 
+            }
+        }
+
+        function renderGridView(images) {
+            elements.masonryView.innerHTML = '';
+            
+            images.forEach((image, index) => {
+                const imageItem = document.createElement('div');
+                imageItem.className = 'image-item';
+                imageItem.innerHTML = `
+                    <img src="${image.url}" alt="${image.name}" loading="lazy" data-index="${index}">
+                    <div class="image-info">
+                        <div class="image-name">${image.name}</div>
+                        <div class="image-path">${image.path}</div>
+                    </div>
+                `;
+                imageItem.querySelector('img').addEventListener('click', () => openFullscreen(index));
+                elements.masonryView.appendChild(imageItem);
+            });
+            
+            elements.masonryView.classList.remove('hidden');
+            elements.folderView.classList.add('hidden');
+        }
+
+        function renderFolderView(images) {
+            // 按文件夹分组
+            const folders = {};
+            images.forEach(image => {
+                const folderPath = image.folder;
+                if (!folders[folderPath]) {
+                    folders[folderPath] = [];
+                }
+                folders[folderPath].push(image);
+            });
+            
+            elements.folderView.innerHTML = '';
+            
+            Object.keys(folders).forEach(folderName => {
+                const folderItem = document.createElement('div');
+                folderItem.className = 'folder-item';
+                
+                // 1. 头部点击进入单文件夹模式
+                const headerHtml = `
+                    <div class="folder-header">
+                        <div class="folder-name">
+                            <span class="folder-icon">📂</span>
+                            ${folderName}
+                        </div>
+                        <div class="folder-count">${folders[folderName].length} 张图片</div>
+                    </div>
+                `;
+                
+                // 2. 只加载前 10 张图片
+                const previewImages = folders[folderName].slice(0, 10);
+                
+                const imagesHtml = `
+                    <div class="folder-images">
+                        ${previewImages.map((image, index) => `
+                            <div class="folder-image">
+                                <img src="${image.url}" alt="${image.name}" loading="lazy">
+                            </div>
+                        `).join('')}
+                        ${folders[folderName].length > 10 ? 
+                            `<div style="display:flex;align-items:center;justify-content:center;color:#666;font-size:0.9rem;">+${folders[folderName].length - 10}</div>` 
+                            : ''}
+                    </div>
+                `;
+                
+                folderItem.innerHTML = headerHtml + imagesHtml;
+                
+                // 绑定头部点击事件
+                folderItem.querySelector('.folder-header').addEventListener('click', () => {
+                    enterFolder(folderName);
+                });
+
+                // 绑定缩略图点击事件 (在文件夹预览模式下点击图片也进入大图)
+                // 注意：这里需要查找该图片在全局 filteredImages 中的索引
+                folderItem.querySelectorAll('.folder-image img').forEach((img, i) => {
+                    const imgName = previewImages[i].name;
+                    // 找到这个图片在当前全局列表中的真实索引
+                    const globalIndex = state.filteredImages.findIndex(item => item.name === imgName && item.folder === folderName);
+                    
+                    if(globalIndex !== -1) {
+                        img.addEventListener('click', (e) => {
+                            e.stopPropagation(); // 防止冒泡触发 header 的点击
+                            openFullscreen(globalIndex);
+                        });
+                    }
+                });
+                
+                elements.folderView.appendChild(folderItem);
+            });
+            
+            elements.folderView.classList.remove('hidden');
+            elements.masonryView.classList.add('hidden');
+        }
+
+        function openFullscreen(index) {
+            state.fullscreenIndex = index;
+            const image = state.filteredImages[index];
+            resetZoom();
+            document.body.classList.add('fullscreen-active');
+            elements.fullscreenImage.src = image.url;
+            elements.fullscreenCaption.textContent = `${image.name} (${image.path})`;
+            elements.fullscreenOverlay.style.display = 'flex';
+            updateNavButtons();
+        }
+
+        function closeFullscreen() {
+            document.body.classList.remove('fullscreen-active');
+            elements.fullscreenOverlay.style.display = 'none';
+            resetZoom();
+        }
+
+        function showPrevImage() {
+            if (state.fullscreenIndex > 0) {
+                state.fullscreenIndex--;
+                switchImage();
+            }
+        }
+
+        function showNextImage() {
+            if (state.fullscreenIndex < state.filteredImages.length - 1) {
+                state.fullscreenIndex++;
+                switchImage();
+            }
+        }
+
+        function switchImage() {
+            const image = state.filteredImages[state.fullscreenIndex];
+            elements.fullscreenImage.src = image.url;
+            elements.fullscreenCaption.textContent = `${image.name} (${image.path})`;
+            updateNavButtons();
+            resetZoom();
+        }
+
+        function updateNavButtons() {
+            elements.prevBtn.style.display = state.fullscreenIndex > 0 ? 'flex' : 'none';
+            elements.nextBtn.style.display = state.fullscreenIndex < state.filteredImages.length - 1 ? 'flex' : 'none';
+        }
+
+        function isScrolledToBottom() {
+            return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 100;
+        }
+
+        function loadMoreImages() {
+            if (state.currentPage * state.itemsPerPage >= state.filteredImages.length) return;
+            elements.loadingIndicator.classList.remove('hidden');
+            setTimeout(() => {
+                state.currentPage++;
+                renderImages();
+                elements.loadingIndicator.classList.add('hidden');
+            }, 500);
+        }
+
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        init();
+    </script>
+</body>
+</html>
