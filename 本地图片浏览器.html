@@ -851,21 +851,28 @@
             
             // 视图切换 (点击顶部按钮视为重置到查看所有)
             elements.gridViewBtn.addEventListener('click', () => {
+                // 网格视图：重置所有过滤状态
                 state.activeFolder = null; // 重置文件夹过滤
                 state.searchQuery = ''; // 清空搜索
                 elements.searchInput.value = '';
                 switchView('grid');
             });
+
             elements.folderViewBtn.addEventListener('click', () => {
+                // 文件夹视图：重置所有过滤状态，显示所有文件夹分组
                 state.activeFolder = null; // 重置文件夹过滤
                 state.searchQuery = ''; // 清空搜索
                 elements.searchInput.value = '';
                 switchView('folder');
             });
+
             elements.comicViewBtn.addEventListener('click', () => {
-                // 条漫模式的特殊处理：
-                // 如果当前在文件夹内，保持activeFolder不变
-                // 如果在全局视图，也保持activeFolder不变（已经是null）
+                // 条漫视图：保持当前上下文（activeFolder和搜索状态）
+                // 这样可以在文件夹内继续使用条漫模式浏览
+                console.log('切换到条漫视图，当前状态:', {
+                    activeFolder: state.activeFolder,
+                    searchQuery: state.searchQuery
+                });
                 switchView('comic');
             });
             
@@ -1168,7 +1175,7 @@
 
         // 切换视图
         function switchView(view) {
-            // 记录之前的视图，用于判断是否需要重新过滤
+            // 记录之前的视图，用于状态跟踪
             const previousView = state.currentView;
 
             // 启动视图切换保护
@@ -1179,33 +1186,33 @@
             state.currentView = view;
             state.currentPage = 1;
 
-            // 重新计算过滤的逻辑：
-            // 1. 从文件夹视图切换到其他视图时，需要重新过滤（因为数据结构不同）
-            // 2. 切换到文件夹视图时，需要重新过滤（显示所有图片的分组）
-            // 3. 在activeFolder模式下切换视图时，需要重新应用文件夹过滤
-            const shouldRefilter =
-                previousView === 'folder' || // 从文件夹视图切换出来
-                view === 'folder' || // 切换到文件夹视图
-                state.activeFolder !== null; // 在activeFolder模式下切换
+            // 添加调试日志
+            console.log('视图切换:', {
+                from: previousView,
+                to: view,
+                activeFolder: state.activeFolder,
+                searchQuery: state.searchQuery,
+                imagesLength: state.images.length
+            });
 
-            if (shouldRefilter) {
+            // 重新计算过滤的逻辑：
+            // 文件夹视图不需要过滤，应该显示所有图片的分组
+            // 其他视图需要应用当前的过滤条件
+            if (view === 'folder') {
+                console.log('切换到文件夹视图，不需要过滤，使用所有图片数据');
+                // 不需要调用filterAndSortImages，让renderImages使用state.images
+            } else {
+                console.log('切换到其他视图，应用当前过滤条件');
                 filterAndSortImages();
             }
 
             // 更新面包屑
             updateBreadcrumb();
 
-            // 更新按钮状态
-            // 如果在 activeFolder 模式下，顶部按钮状态逻辑：
-            if (state.activeFolder) {
-                elements.gridViewBtn.classList.remove('active');
-                elements.folderViewBtn.classList.remove('active');
-                elements.comicViewBtn.classList.toggle('active', view === 'comic');
-            } else {
-                elements.gridViewBtn.classList.toggle('active', view === 'grid');
-                elements.folderViewBtn.classList.toggle('active', view === 'folder');
-                elements.comicViewBtn.classList.toggle('active', view === 'comic');
-            }
+            // 更新按钮状态：统一逻辑，不受activeFolder影响
+            elements.gridViewBtn.classList.toggle('active', view === 'grid');
+            elements.folderViewBtn.classList.toggle('active', view === 'folder');
+            elements.comicViewBtn.classList.toggle('active', view === 'comic');
 
             // 显示/隐藏视图
             elements.masonryView.style.display = view === 'grid' ? 'flex' : 'none';
@@ -1224,6 +1231,7 @@
                     setTimeout(() => {
                         state.isViewSwitching = false;
                         viewSwitchProtection.isSwitching = false;
+                        console.log('视图切换完成:', view);
                     }, viewSwitchProtection.protectionDuration);
                 });
             });
@@ -1242,6 +1250,27 @@
 
         // 渲染图片 - 优化版本
         function renderImages() {
+            // 文件夹视图的特殊处理
+            if (state.currentView === 'folder') {
+                if (state.images.length === 0) {
+                    elements.emptyState.classList.remove('hidden');
+                    elements.masonryView.classList.add('hidden');
+                    elements.comicView.classList.add('hidden');
+                    elements.folderView.classList.add('hidden');
+                    elements.imageCount.textContent = '0';
+                    return;
+                }
+
+                elements.emptyState.classList.add('hidden');
+                // 文件夹视图显示所有图片数量，而不是过滤后的数量
+                elements.imageCount.textContent = state.images.length;
+
+                requestAnimationFrame(() => {
+                    renderFolderView(state.images);
+                });
+                return;
+            }
+
             const visibleImages = state.filteredImages.slice(0, state.currentPage * state.itemsPerPage);
 
             if (visibleImages.length === 0) {
@@ -1262,12 +1291,9 @@
                     renderGridView(visibleImages);
                 } else if (state.currentView === 'comic') {
                     renderComicView(visibleImages);
-                } else if (state.currentView === 'folder' && !state.activeFolder) {
-                    // 只有在文件夹视图模式且没有activeFolder时才渲染文件夹视图
-                    renderFolderView(state.filteredImages);
                 } else {
-                    // 如果是activeFolder模式，但意外进入了文件夹视图，强制切换到网格视图
-                    console.warn('检测到activeFolder模式下尝试渲染文件夹视图，自动切换到网格视图');
+                    // 兜底处理：如果状态不匹配，强制切换到网格视图
+                    console.warn('意外的视图状态:', state.currentView, '强制切换到网格视图');
                     state.currentView = 'grid';
                     renderGridView(visibleImages);
                 }
@@ -1418,15 +1444,19 @@
 
         // 优化的文件夹视图渲染
         function renderFolderView(images) {
+            console.log('renderFolderView被调用，传入图片数量:', images.length);
+
             // 使用缓存的文件夹数据，避免重复计算
             let folders;
             const cacheKey = images.length;
 
             if (state.folderCache.has(cacheKey)) {
                 folders = state.folderCache.get(cacheKey);
+                console.log('使用缓存的文件夹数据');
             } else {
                 folders = groupImagesByFolder(images);
                 state.folderCache.set(cacheKey, folders);
+                console.log('重新计算文件夹数据，文件夹数量:', Object.keys(folders).length);
             }
 
             // 使用DocumentFragment优化DOM操作
@@ -1435,6 +1465,8 @@
             // 限制同时渲染的文件夹数量，提升性能
             const maxFoldersToRender = 20;
             const folderNames = Object.keys(folders).slice(0, maxFoldersToRender);
+
+            console.log('将要渲染的文件夹:', folderNames);
 
             folderNames.forEach(folderName => {
                 const folderItem = createFolderItem(folders[folderName], folderName);
@@ -1462,8 +1494,13 @@
             elements.folderView.innerHTML = '';
             elements.folderView.appendChild(fragment);
 
+            // 确保正确的显示状态
             elements.folderView.classList.remove('hidden');
+            elements.folderView.style.display = 'block';
             elements.masonryView.classList.add('hidden');
+            elements.comicView.classList.add('hidden');
+
+            console.log('文件夹视图渲染完成');
         }
 
         // 按文件夹分组图片
