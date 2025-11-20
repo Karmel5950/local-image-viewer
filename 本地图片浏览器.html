@@ -492,6 +492,40 @@
         body.fullscreen-active {
             overflow: hidden;
         }
+
+        /* 返回置顶按钮样式 */
+        .back-to-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.3s ease;
+            z-index: 999;
+            opacity: 0;
+            visibility: hidden;
+            box-shadow: 0 4px 12px rgba(93, 125, 185, 0.3);
+        }
+
+        .back-to-top.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .back-to-top:hover {
+            background: var(--secondary-color);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 16px rgba(93, 125, 185, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -571,6 +605,9 @@
         </div>
     </div>
 
+    <!-- 返回置顶按钮 -->
+    <button class="back-to-top" id="backToTop" title="返回顶部">↑</button>
+
     <script>
         // 状态管理
         let state = {
@@ -618,7 +655,8 @@
             fullscreenCaption: document.getElementById('fullscreenCaption'),
             closeFullscreen: document.getElementById('closeFullscreen'),
             prevBtn: document.getElementById('prevBtn'),
-            nextBtn: document.getElementById('nextBtn')
+            nextBtn: document.getElementById('nextBtn'),
+            backToTop: document.getElementById('backToTop')
         };
 
         // 初始化
@@ -679,11 +717,21 @@
             
             setupImageInteractions();
 
+            // 返回置顶按钮
+            elements.backToTop.addEventListener('click', () => {
+                window.scrollTo({
+                    top: 0,
+                    behavior: 'smooth'
+                });
+            });
+
             // 无限滚动
             window.addEventListener('scroll', debounce(() => {
                 if (isScrolledToBottom() && state.currentPage * state.itemsPerPage < state.filteredImages.length) {
                     loadMoreImages();
                 }
+                // 更新返回置顶按钮显示状态
+                updateBackToTopButton();
             }, 200));
             
             // 键盘导航
@@ -1087,6 +1135,15 @@
                 clearTimeout(timeout);
                 timeout = setTimeout(later, wait);
             };
+        }
+
+        // 更新返回置顶按钮显示状态
+        function updateBackToTopButton() {
+            if (window.scrollY > 300) {
+                elements.backToTop.classList.add('visible');
+            } else {
+                elements.backToTop.classList.remove('visible');
+            }
         }
 
         init();
