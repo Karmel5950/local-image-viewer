@@ -608,6 +608,10 @@
             </button>
             <input type="file" id="folderInput" webkitdirectory directory multiple>
         </div>
+
+        <button id="debugBtn" style="display: none;" onclick="validateAllImageUrls()">
+            <i>🔍</i> 调试URL
+        </button>
         
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="搜索图片名称..." disabled>
@@ -759,8 +763,8 @@
             // 监听页面可见性变化，优化性能
             document.addEventListener('visibilitychange', handleVisibilityChange);
 
-            // 添加内存清理定时器
-            setInterval(cleanupUnusedUrls, 60000); // 每分钟清理一次
+            // 暂时禁用自动清理定时器，避免干扰图片显示
+            // setInterval(cleanupUnusedUrls, 60000); // 每分钟清理一次
         }
 
         // 清理资源
@@ -786,7 +790,7 @@
             }
         }
 
-        // 清理未使用的URL
+        // 清理未使用的URL - 改进版本
         function cleanupUnusedUrls() {
             // 获取当前页面中实际使用的图片
             const currentImages = document.querySelectorAll('img[data-src], img[src]');
@@ -796,20 +800,31 @@
                 if (img.dataset.src) {
                     usedUrls.add(img.dataset.src);
                 }
-                if (img.src && !img.src.startsWith('data:image/svg+xml')) {
+                if (img.src && !img.src.startsWith('data:image/svg+xml') && img.src.startsWith('blob:')) {
                     usedUrls.add(img.src);
                 }
             });
 
-            // 清理不再使用的URL
+            // 安全清理：只清理确认不再使用的URL，并延迟清理
+            const urlsToRevoke = [];
             for (const [key, url] of state.urlCache.entries()) {
                 if (!usedUrls.has(url)) {
-                    URL.revokeObjectURL(url);
-                    state.urlCache.delete(key);
+                    urlsToRevoke.push({ key, url });
                 }
             }
 
-            console.log(`已清理 ${state.urlCache.size} 个缓存的URL`);
+            // 延迟清理，确保正在加载的图片不会被中断
+            setTimeout(() => {
+                urlsToRevoke.forEach(({ key, url }) => {
+                    try {
+                        URL.revokeObjectURL(url);
+                        state.urlCache.delete(key);
+                    } catch (e) {
+                        console.warn('清理URL失败:', e);
+                    }
+                });
+                console.log(`安全清理了 ${urlsToRevoke.length} 个URL，当前缓存 ${state.urlCache.size} 个`);
+            }, 5000); // 5秒延迟清理
         }
 
         // 清理URL缓存
@@ -820,13 +835,53 @@
             state.urlCache.clear();
         }
 
-        // 获取或创建图片URL
+        // 获取或创建图片URL - 增强调试版本
         function getImageUrl(file) {
             const fileKey = `${file.name}_${file.size}_${file.lastModified}`;
+
             if (!state.urlCache.has(fileKey)) {
-                const url = URL.createObjectURL(file);
-                state.urlCache.set(fileKey, url);
+                try {
+                    // 验证文件对象
+                    if (!file || !(file instanceof File) || !file.type.startsWith('image/')) {
+                        throw new Error('无效的图片文件');
+                    }
+
+                    console.log('准备创建blob URL，文件信息:', {
+                        name: file.name,
+                        size: file.size,
+                        type: file.type,
+                        lastModified: file.lastModified
+                    });
+
+                    // 创建blob URL
+                    const url = URL.createObjectURL(file);
+
+                    // 验证URL是否创建成功
+                    if (!url || !url.startsWith('blob:')) {
+                        throw new Error('创建blob URL失败');
+                    }
+
+                    state.urlCache.set(fileKey, url);
+                    console.log('✅ 成功创建图片URL:', fileKey, url);
+
+                    // 立即验证URL是否可用
+                    const testImg = new Image();
+                    testImg.onload = () => {
+                        console.log('✅ URL验证成功:', file.name);
+                    };
+                    testImg.onerror = () => {
+                        console.error('❌ URL验证失败:', file.name, 'URL可能被浏览器阻止');
+                    };
+                    testImg.src = url;
+
+                } catch (error) {
+                    console.error('❌ 创建图片URL失败:', fileKey, error);
+                    return null;
+                }
+            } else {
+                console.log('🔄 使用缓存的图片URL:', fileKey, state.urlCache.get(fileKey));
             }
+
             return state.urlCache.get(fileKey);
         }
 
@@ -1031,10 +1086,21 @@
             elements.folderViewBtn.disabled = false;
             elements.comicViewBtn.disabled = false;
 
+            // 显示调试按钮
+            document.getElementById('debugBtn').style.display = 'flex';
+
             state.images = imageFiles.map((file, index) => {
                 const path = file.webkitRelativePath || file.name;
                 const pathParts = path.split('/');
                 const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '根目录';
+                const fileKey = `${file.name}_${file.size}_${file.lastModified}`;
+                const url = getImageUrl(file);
+
+                // 检查URL是否创建成功
+                if (!url) {
+                    console.warn('跳过无效图片文件:', file.name);
+                    return null;
+                }
 
                 return {
                     name: file.name,
@@ -1042,10 +1108,10 @@
                     folder: folder,
                     date: new Date(file.lastModified).toISOString().split('T')[0],
                     file: file,
-                    url: getImageUrl(file), // 使用缓存的URL
-                    fileKey: `${file.name}_${file.size}_${file.lastModified}`
+                    url: url, // 使用缓存的URL
+                    fileKey: fileKey
                 };
-            });
+            }).filter(item => item !== null); // 过滤掉无效的图片
 
             state.activeFolder = null;
             state.currentPage = 1;
@@ -1055,6 +1121,10 @@
 
             // 使用setTimeout避免阻塞UI
             setTimeout(() => {
+                // 验证所有图片URL的有效性
+                console.log('🔍 开始验证所有图片URL...');
+                validateAllImageUrls();
+
                 filterAndSortImages();
                 renderImages();
 
@@ -1094,6 +1164,58 @@
             if (tip) {
                 tip.remove();
             }
+        }
+
+        // 验证所有图片URL的有效性
+        function validateAllImageUrls() {
+            let validCount = 0;
+            let invalidCount = 0;
+
+            state.images.forEach((image, index) => {
+                if (image.url) {
+                    const testImg = new Image();
+                    testImg.onload = () => {
+                        validCount++;
+                        console.log(`✅ 图片 ${index + 1}/${state.images.length} 验证成功:`, image.name);
+
+                        if (validCount + invalidCount === state.images.length) {
+                            console.log(`📊 URL验证完成: ${validCount} 个成功, ${invalidCount} 个失败`);
+                        }
+                    };
+                    testImg.onerror = () => {
+                        invalidCount++;
+                        console.error(`❌ 图片 ${index + 1}/${state.images.length} 验证失败:`, image.name, 'URL:', image.url);
+
+                        // 尝试重新创建URL
+                        const newUrl = getImageUrl(image.file);
+                        if (newUrl && newUrl !== image.url) {
+                            console.log(`🔄 尝试重新创建URL:`, image.name);
+                            image.url = newUrl;
+                            // 重新验证
+                            setTimeout(() => {
+                                const retryImg = new Image();
+                                retryImg.onload = () => {
+                                    validCount++;
+                                    invalidCount--;
+                                    console.log(`✅ 重试成功:`, image.name);
+                                };
+                                retryImg.onerror = () => {
+                                    console.error(`❌ 重试失败:`, image.name);
+                                };
+                                retryImg.src = newUrl;
+                            }, 100);
+                        }
+
+                        if (validCount + invalidCount === state.images.length) {
+                            console.log(`📊 URL验证完成: ${validCount} 个成功, ${invalidCount} 个失败`);
+                        }
+                    };
+                    testImg.src = image.url;
+                } else {
+                    invalidCount++;
+                    console.warn(`⚠️ 图片URL为空:`, image.name);
+                }
+            });
         }
 
         // 进入特定文件夹
@@ -1305,10 +1427,12 @@
             // 使用DocumentFragment批量操作DOM
             const fragment = document.createDocumentFragment();
 
-            // 为每个图片创建元素，不再需要全局索引计算
+            // 为每个图片创建元素，过滤掉无效的图片项
             images.forEach((image) => {
                 const imageItem = createImageItem(image);
-                fragment.appendChild(imageItem);
+                if (imageItem) {
+                    fragment.appendChild(imageItem);
+                }
             });
 
             // 一次性更新DOM
@@ -1320,28 +1444,47 @@
             elements.folderView.classList.add('hidden');
         }
 
-        // 优化的图片项元素创建 - 使用fileKey确保正确的索引匹配
+        // 简化的图片项元素创建 - 直接加载，不使用懒加载
         function createImageItem(image) {
             const imageItem = document.createElement('div');
             imageItem.className = 'image-item';
 
-            // 创建图片占位符
+            // 检查图片URL是否有效
+            if (!image.url) {
+                console.warn('图片URL为空，跳过:', image.name);
+                return null;
+            }
+
+            // 直接创建图片元素，不使用懒加载
             const img = document.createElement('img');
             img.alt = image.name;
             img.dataset.fileKey = image.fileKey; // 使用fileKey作为唯一标识
-            img.dataset.src = image.url; // 使用data-src进行懒加载
-            img.loading = 'lazy';
+            img.style.cursor = 'pointer';
+            img.style.transition = 'transform 0.3s';
 
-            // 初始显示低质量占位图
-            img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik04NSA2NUgxMTVWMTE1SDg1VjY1WiIgZmlsbD0iI0QxRDFEMSIvPgo8cGF0aCBkPSJNMTAwIDg1TDg1IDEwNUgxMTVMMTAwIDg1WiIgZmlsbD0iI0QxRDFEMSIvPgo8dGV4dCB4PSIxMDAiIHk9IjEzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTk5OSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9IkFyaWFsIj7lm6DmgYXmlbDmjaI8L3RleHQ+Cjwvc3ZnPgo=';
-
-            // 设置懒加载
-            setupLazyLoading(img);
+            // 直接设置图片源，不使用懒加载
+            img.src = image.url;
 
             // 添加图片加载错误处理
             img.addEventListener('error', function() {
                 this.onerror = null;
+                console.error('图片加载失败:', image.name, 'URL:', image.url);
+
+                // 显示错误图片
                 this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik04NSA2NUgxMTVWMTE1SDg1VjY1WiIgZmlsbD0iI0QxRDFEMSIvPgo8cGF0aCBkPSJNMTAwIDg1TDg1IDEwNUgxMTVMMTAwIDg1WiIgZmlsbD0iI0QxRDFEMSIvPgo8dGV4dCB4PSIxMDAiIHk9IjEzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTk5OSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9IkFyaWFsIj7kuK3vvIzlm6DmgYXmlbDmjaI8L3RleHQ+Cjwvc3ZnPgo=';
+            });
+
+            // 添加成功加载日志和悬停效果
+            img.addEventListener('load', function() {
+                console.log('图片加载成功:', image.name);
+            });
+
+            img.addEventListener('mouseenter', function() {
+                this.style.transform = 'scale(1.03)';
+            });
+
+            img.addEventListener('mouseleave', function() {
+                this.style.transform = 'scale(1)';
             });
 
             // 添加点击事件 - 通过fileKey查找正确的索引
@@ -1428,10 +1571,12 @@
         function renderComicView(images) {
             const fragment = document.createDocumentFragment();
 
-            // 为每个图片创建元素，不再需要全局索引计算
+            // 为每个图片创建元素，过滤掉无效的图片项
             images.forEach((image) => {
                 const imageItem = createImageItem(image);
-                fragment.appendChild(imageItem);
+                if (imageItem) {
+                    fragment.appendChild(imageItem);
+                }
             });
 
             elements.comicView.innerHTML = '';
@@ -1590,14 +1735,27 @@
             folderImage.className = 'folder-image';
 
             const img = document.createElement('img');
-            img.src = image.url;
             img.alt = image.name;
-            img.loading = 'lazy';
+            img.style.cursor = 'pointer';
+            img.style.transition = 'transform 0.3s';
+
+            // 直接设置图片源，不使用懒加载
+            img.src = image.url;
 
             // 添加图片加载错误处理
             img.addEventListener('error', function() {
                 this.onerror = null;
+                console.error('文件夹预览图片加载失败:', image.name);
                 this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgdmlld0JveD0iMCAwIDEyMCAxMjAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik01MCA0MEg3MFo4MFY4MEg1MFY0MFoiIGZpbGw9IiNEMUQxRDEiLz4KPHRleHQgeD0iNjAiIHk9IjkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjOTk5OTk5IiBmb250LXNpemU9IjEyIiBmb250LWZhbWlseT0iQXJpYWwiPuS4re+8jOWbguOBruS7peWFpeW9kzwvdGV4dD4KPC9zdmc+';
+            });
+
+            // 添加悬停效果
+            img.addEventListener('mouseenter', function() {
+                this.style.transform = 'scale(1.1)';
+            });
+
+            img.addEventListener('mouseleave', function() {
+                this.style.transform = 'scale(1)';
             });
 
             // 绑定点击事件
