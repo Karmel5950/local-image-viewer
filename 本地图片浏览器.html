@@ -1279,12 +1279,9 @@
             // 使用DocumentFragment批量操作DOM
             const fragment = document.createDocumentFragment();
 
-            // 计算全局索引偏移量
-            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
-
-            images.forEach((image, localIndex) => {
-                const globalIndex = startIndex + localIndex;
-                const imageItem = createImageItem(image, globalIndex);
+            // 为每个图片创建元素，不再需要全局索引计算
+            images.forEach((image) => {
+                const imageItem = createImageItem(image);
                 fragment.appendChild(imageItem);
             });
 
@@ -1297,15 +1294,15 @@
             elements.folderView.classList.add('hidden');
         }
 
-        // 优化的图片项元素创建 - 支持懒加载和正确的全局索引
-        function createImageItem(image, globalIndex) {
+        // 优化的图片项元素创建 - 使用fileKey确保正确的索引匹配
+        function createImageItem(image) {
             const imageItem = document.createElement('div');
             imageItem.className = 'image-item';
 
             // 创建图片占位符
             const img = document.createElement('img');
             img.alt = image.name;
-            img.dataset.globalIndex = globalIndex; // 使用全局索引
+            img.dataset.fileKey = image.fileKey; // 使用fileKey作为唯一标识
             img.dataset.src = image.url; // 使用data-src进行懒加载
             img.loading = 'lazy';
 
@@ -1321,8 +1318,15 @@
                 this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik04NSA2NUgxMTVWMTE1SDg1VjY1WiIgZmlsbD0iI0QxRDFEMSIvPgo8cGF0aCBkPSJNMTAwIDg1TDg1IDEwNUgxMTVMMTAwIDg1WiIgZmlsbD0iI0QxRDFEMSIvPgo8dGV4dCB4PSIxMDAiIHk9IjEzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTk5OSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9IkFyaWFsIj7kuK3vvIzlm6DmgYXmlbDmjaI8L3RleHQ+Cjwvc3ZnPgo=';
             });
 
-            // 添加点击事件 - 使用全局索引
-            img.addEventListener('click', () => openFullscreen(globalIndex));
+            // 添加点击事件 - 通过fileKey查找正确的索引
+            img.addEventListener('click', () => {
+                const actualIndex = state.filteredImages.findIndex(item => item.fileKey === image.fileKey);
+                if (actualIndex !== -1) {
+                    openFullscreen(actualIndex);
+                } else {
+                    console.error('无法找到图片的索引:', image.fileKey);
+                }
+            });
 
             // 创建图片信息
             const imageInfo = document.createElement('div');
@@ -1398,12 +1402,9 @@
         function renderComicView(images) {
             const fragment = document.createDocumentFragment();
 
-            // 计算全局索引偏移量
-            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
-
-            images.forEach((image, localIndex) => {
-                const globalIndex = startIndex + localIndex;
-                const imageItem = createImageItem(image, globalIndex);
+            // 为每个图片创建元素，不再需要全局索引计算
+            images.forEach((image) => {
+                const imageItem = createImageItem(image);
                 fragment.appendChild(imageItem);
             });
 
