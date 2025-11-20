@@ -160,28 +160,38 @@
             font-weight: normal;
         }
         
-        .masonry-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
+        .masonry-grid:not(.hidden) {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 15px !important;
             margin-bottom: 30px;
-            align-items: flex-start;
+            align-items: flex-start !important;
+        }
+
+        .masonry-grid.hidden {
+            display: none !important;
         }
 
         .masonry-grid .image-item {
-            flex: 0 0 calc(25% - 11.25px);
-            margin-bottom: 0;
+            flex: 0 0 calc(25% - 11.25px) !important;
+            margin-bottom: 0 !important;
+            width: calc(25% - 11.25px) !important;
+            max-width: calc(25% - 11.25px) !important;
         }
 
         @media (max-width: 1200px) {
             .masonry-grid .image-item {
-                flex: 0 0 calc(33.333% - 10px);
+                flex: 0 0 calc(33.333% - 10px) !important;
+                width: calc(33.333% - 10px) !important;
+                max-width: calc(33.333% - 10px) !important;
             }
         }
 
         @media (max-width: 768px) {
             .masonry-grid .image-item {
-                flex: 0 0 calc(50% - 7.5px);
+                flex: 0 0 calc(50% - 7.5px) !important;
+                width: calc(50% - 7.5px) !important;
+                max-width: calc(50% - 7.5px) !important;
             }
 
             .controls {
@@ -197,7 +207,59 @@
 
         @media (max-width: 480px) {
             .masonry-grid .image-item {
-                flex: 0 0 100%;
+                flex: 0 0 100% !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+        }
+
+        /* 条漫阅览模式样式 */
+        .comic-view:not(.hidden) {
+            display: block !important;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .comic-view.hidden {
+            display: none !important;
+        }
+
+        .comic-view .image-item {
+            display: block !important;
+            width: 100% !important;
+            max-width: 800px !important;
+            margin: 0 auto 20px auto !important;
+            text-align: center;
+            flex: none !important;
+        }
+
+        .comic-view .image-item img {
+            width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            object-fit: contain !important;
+            margin: 0 auto !important;
+            display: block !important;
+        }
+
+        .comic-view .image-info {
+            text-align: left;
+            width: 100%;
+            padding: 12px 0;
+        }
+
+        @media (max-width: 900px) {
+            .comic-view .image-item {
+                max-width: calc(100% - 40px) !important;
+                padding: 0 20px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .comic-view .image-item {
+                max-width: calc(100% - 20px) !important;
+                padding: 0 10px;
+                margin-bottom: 15px !important;
             }
         }
         
@@ -207,6 +269,7 @@
             box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
             transition: transform 0.3s, box-shadow 0.3s;
             background: white;
+            /* 移除默认的flex属性，避免干扰不同视图模式 */
         }
         
         .image-item:hover {
@@ -247,8 +310,12 @@
             text-overflow: ellipsis;
         }
         
-        .folder-view {
-            display: none;
+        .folder-view:not(.hidden) {
+            display: block !important;
+        }
+
+        .folder-view.hidden {
+            display: none !important;
         }
         
         .folder-item {
@@ -486,7 +553,7 @@
         }
         
         .hidden {
-            display: none;
+            display: none !important;
         }
         
         body.fullscreen-active {
@@ -559,6 +626,9 @@
             <button id="folderViewBtn" disabled>
                 <i>📂</i> 文件夹视图
             </button>
+            <button id="comicViewBtn" disabled>
+                <i>📜</i> 条漫阅览
+            </button>
         </div>
         
         <div class="image-counter">
@@ -574,8 +644,11 @@
     
     <div id="masonryView" class="masonry-grid">
         </div>
-    
-    <div id="folderView" class="folder-view">
+
+    <div id="comicView" class="comic-view hidden">
+        </div>
+
+    <div id="folderView" class="folder-view hidden">
         </div>
     
     <div id="loadingIndicator" class="loading hidden">
@@ -613,7 +686,7 @@
         let state = {
             images: [],
             filteredImages: [],
-            currentView: 'grid', // 'grid' or 'folder'
+            currentView: 'grid', // 'grid', 'folder', 'comic'
             activeFolder: null,  // 当前进入的特定文件夹，null 表示查看所有
             sortBy: 'name',
             searchQuery: '',
@@ -641,7 +714,9 @@
             sortSelect: document.getElementById('sortSelect'),
             gridViewBtn: document.getElementById('gridViewBtn'),
             folderViewBtn: document.getElementById('folderViewBtn'),
+            comicViewBtn: document.getElementById('comicViewBtn'),
             masonryView: document.getElementById('masonryView'),
+            comicView: document.getElementById('comicView'),
             folderView: document.getElementById('folderView'),
             breadcrumbBar: document.getElementById('breadcrumbBar'),
             breadcrumbAll: document.getElementById('breadcrumbAll'),
@@ -694,6 +769,10 @@
             elements.folderViewBtn.addEventListener('click', () => {
                 state.activeFolder = null; // 重置文件夹过滤
                 switchView('folder');
+            });
+            elements.comicViewBtn.addEventListener('click', () => {
+                // 条漫模式通常在特定文件夹中使用，不重置activeFolder
+                switchView('comic');
             });
             
             // 面包屑导航点击
@@ -846,6 +925,7 @@
             elements.sortSelect.disabled = false;
             elements.gridViewBtn.disabled = false;
             elements.folderViewBtn.disabled = false;
+            elements.comicViewBtn.disabled = false;
             
             state.images = imageFiles.map((file, index) => {
                 const path = file.webkitRelativePath || file.name;
@@ -873,8 +953,8 @@
             state.activeFolder = folderName;
             state.searchQuery = ''; // 清空搜索，或者保留看需求，通常进入文件夹想看所有的
             elements.searchInput.value = '';
-            
-            switchView('grid'); // 强制切换到网格视图
+
+            switchView('grid'); // 强制切换到网格视图，修复图片过大的问题
         }
 
         // 过滤和排序图片
@@ -913,27 +993,30 @@
         function switchView(view) {
             state.currentView = view;
             state.currentPage = 1;
-            
+
             // 重新计算过滤（因为可能刚刚退出了 activeFolder）
             filterAndSortImages();
 
             // 更新面包屑
             updateBreadcrumb();
-            
+
             // 更新按钮状态
             // 如果在 activeFolder 模式下，虽然是 grid 布局，但顶部按钮不应显示选中状态，以免混淆
             if (state.activeFolder) {
                 elements.gridViewBtn.classList.remove('active');
                 elements.folderViewBtn.classList.remove('active');
+                elements.comicViewBtn.classList.toggle('active', view === 'comic');
             } else {
                 elements.gridViewBtn.classList.toggle('active', view === 'grid');
                 elements.folderViewBtn.classList.toggle('active', view === 'folder');
+                elements.comicViewBtn.classList.toggle('active', view === 'comic');
             }
-            
+
             // 显示/隐藏视图
-            elements.masonryView.style.display = view === 'grid' ? 'block' : 'none';
+            elements.masonryView.style.display = view === 'grid' ? 'flex' : 'none';
+            elements.comicView.style.display = view === 'comic' ? 'block' : 'none';
             elements.folderView.style.display = view === 'folder' ? 'block' : 'none';
-            
+
             // 重新渲染
             renderImages();
         }
@@ -956,6 +1039,7 @@
             if (visibleImages.length === 0) {
                 elements.emptyState.classList.remove('hidden');
                 elements.masonryView.classList.add('hidden');
+                elements.comicView.classList.add('hidden');
                 elements.folderView.classList.add('hidden');
                 elements.imageCount.textContent = '0';
                 return;
@@ -966,16 +1050,18 @@
             
             if (state.currentView === 'grid') {
                 renderGridView(visibleImages);
+            } else if (state.currentView === 'comic') {
+                renderComicView(visibleImages);
             } else {
                 // 在文件夹视图中，我们传递所有过滤后的图片，但在内部进行分组
                 // 注意：如果是 activeFolder 模式，逻辑上不会进入 renderFolderView
-                renderFolderView(state.filteredImages); 
+                renderFolderView(state.filteredImages);
             }
         }
 
         function renderGridView(images) {
             elements.masonryView.innerHTML = '';
-            
+
             images.forEach((image, index) => {
                 const imageItem = document.createElement('div');
                 imageItem.className = 'image-item';
@@ -989,8 +1075,31 @@
                 imageItem.querySelector('img').addEventListener('click', () => openFullscreen(index));
                 elements.masonryView.appendChild(imageItem);
             });
-            
+
             elements.masonryView.classList.remove('hidden');
+            elements.comicView.classList.add('hidden');
+            elements.folderView.classList.add('hidden');
+        }
+
+        function renderComicView(images) {
+            elements.comicView.innerHTML = '';
+
+            images.forEach((image, index) => {
+                const imageItem = document.createElement('div');
+                imageItem.className = 'image-item';
+                imageItem.innerHTML = `
+                    <img src="${image.url}" alt="${image.name}" loading="lazy" data-index="${index}">
+                    <div class="image-info">
+                        <div class="image-name">${image.name}</div>
+                        <div class="image-path">${image.path}</div>
+                    </div>
+                `;
+                imageItem.querySelector('img').addEventListener('click', () => openFullscreen(index));
+                elements.comicView.appendChild(imageItem);
+            });
+
+            elements.comicView.classList.remove('hidden');
+            elements.masonryView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
         }
 
