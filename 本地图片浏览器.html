@@ -692,7 +692,11 @@
             searchQuery: '',
             currentPage: 1,
             itemsPerPage: 12,
-            fullscreenIndex: 0
+            fullscreenIndex: 0,
+            urlCache: new Map(), // 缓存URL对象
+            loadedImages: new Set(), // 记录已加载的图片
+            folderCache: new Map(), // 缓存文件夹分组数据
+            isViewSwitching: false // 视图切换标识
         };
 
         // 缩放和拖拽状态
@@ -705,6 +709,13 @@
             translateX: 0,
             translateY: 0,
             hasMoved: false
+        };
+
+        // 视图切换控制状态
+        let viewSwitchProtection = {
+            isSwitching: false,
+            startTime: 0,
+            protectionDuration: 2000 // 2秒保护时间
         };
 
         // DOM 元素
@@ -738,8 +749,85 @@
         function init() {
             state.images = [];
             state.filteredImages = [];
+            state.isLoading = false; // 添加加载状态标识
             renderImages();
             setupEventListeners();
+
+            // 页面卸载时清理资源
+            window.addEventListener('beforeunload', cleanupResources);
+
+            // 监听页面可见性变化，优化性能
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+
+            // 添加内存清理定时器
+            setInterval(cleanupUnusedUrls, 60000); // 每分钟清理一次
+        }
+
+        // 清理资源
+        function cleanupResources() {
+            clearUrlCache();
+            state.folderCache.clear();
+            state.loadedImages.clear();
+
+            // 断开无限滚动观察器
+            if (state.infiniteScrollObserver) {
+                state.infiniteScrollObserver.disconnect();
+            }
+        }
+
+        // 处理页面可见性变化
+        function handleVisibilityChange() {
+            if (document.hidden) {
+                // 页面隐藏时暂停不必要的操作
+                console.log('页面隐藏，暂停性能密集型操作');
+            } else {
+                // 页面显示时恢复操作
+                console.log('页面显示，恢复正常操作');
+            }
+        }
+
+        // 清理未使用的URL
+        function cleanupUnusedUrls() {
+            // 获取当前页面中实际使用的图片
+            const currentImages = document.querySelectorAll('img[data-src], img[src]');
+            const usedUrls = new Set();
+
+            currentImages.forEach(img => {
+                if (img.dataset.src) {
+                    usedUrls.add(img.dataset.src);
+                }
+                if (img.src && !img.src.startsWith('data:image/svg+xml')) {
+                    usedUrls.add(img.src);
+                }
+            });
+
+            // 清理不再使用的URL
+            for (const [key, url] of state.urlCache.entries()) {
+                if (!usedUrls.has(url)) {
+                    URL.revokeObjectURL(url);
+                    state.urlCache.delete(key);
+                }
+            }
+
+            console.log(`已清理 ${state.urlCache.size} 个缓存的URL`);
+        }
+
+        // 清理URL缓存
+        function clearUrlCache() {
+            state.urlCache.forEach((url, key) => {
+                URL.revokeObjectURL(url);
+            });
+            state.urlCache.clear();
+        }
+
+        // 获取或创建图片URL
+        function getImageUrl(file) {
+            const fileKey = `${file.name}_${file.size}_${file.lastModified}`;
+            if (!state.urlCache.has(fileKey)) {
+                const url = URL.createObjectURL(file);
+                state.urlCache.set(fileKey, url);
+            }
+            return state.urlCache.get(fileKey);
         }
 
         // 设置事件监听器
@@ -764,14 +852,20 @@
             // 视图切换 (点击顶部按钮视为重置到查看所有)
             elements.gridViewBtn.addEventListener('click', () => {
                 state.activeFolder = null; // 重置文件夹过滤
+                state.searchQuery = ''; // 清空搜索
+                elements.searchInput.value = '';
                 switchView('grid');
             });
             elements.folderViewBtn.addEventListener('click', () => {
                 state.activeFolder = null; // 重置文件夹过滤
+                state.searchQuery = ''; // 清空搜索
+                elements.searchInput.value = '';
                 switchView('folder');
             });
             elements.comicViewBtn.addEventListener('click', () => {
-                // 条漫模式通常在特定文件夹中使用，不重置activeFolder
+                // 条漫模式的特殊处理：
+                // 如果当前在文件夹内，保持activeFolder不变
+                // 如果在全局视图，也保持activeFolder不变（已经是null）
                 switchView('comic');
             });
             
@@ -804,11 +898,9 @@
                 });
             });
 
-            // 无限滚动
+            // 优化的无限滚动 - 使用Intersection Observer
+            setupInfiniteScroll();
             window.addEventListener('scroll', debounce(() => {
-                if (isScrolledToBottom() && state.currentPage * state.itemsPerPage < state.filteredImages.length) {
-                    loadMoreImages();
-                }
                 // 更新返回置顶按钮显示状态
                 updateBackToTopButton();
             }, 200));
@@ -915,46 +1007,131 @@
         function handleFolderSelect(event) {
             const files = Array.from(event.target.files);
             const imageFiles = files.filter(file => file.type.startsWith('image/'));
-            
+
             if (imageFiles.length === 0) {
                 alert('所选文件夹中没有找到图片文件');
                 return;
             }
-            
+
+            // 清理之前的URL缓存
+            clearUrlCache();
+            state.folderCache.clear();
+            state.loadedImages.clear();
+
             elements.searchInput.disabled = false;
             elements.sortSelect.disabled = false;
             elements.gridViewBtn.disabled = false;
             elements.folderViewBtn.disabled = false;
             elements.comicViewBtn.disabled = false;
-            
+
             state.images = imageFiles.map((file, index) => {
                 const path = file.webkitRelativePath || file.name;
                 const pathParts = path.split('/');
                 const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '根目录';
-                
+
                 return {
                     name: file.name,
                     path: path,
                     folder: folder,
                     date: new Date(file.lastModified).toISOString().split('T')[0],
                     file: file,
-                    url: URL.createObjectURL(file)
+                    url: getImageUrl(file), // 使用缓存的URL
+                    fileKey: `${file.name}_${file.size}_${file.lastModified}`
                 };
             });
-            
+
             state.activeFolder = null;
             state.currentPage = 1;
-            filterAndSortImages();
-            renderImages();
+
+            // 显示加载提示
+            showLoadingTip('正在处理图片数据...');
+
+            // 使用setTimeout避免阻塞UI
+            setTimeout(() => {
+                filterAndSortImages();
+                renderImages();
+
+                // 设置无限滚动（第一次加载也需要）
+                setTimeout(() => {
+                    setupInfiniteScroll();
+                }, 100);
+
+                hideLoadingTip();
+            }, 100);
+        }
+
+        // 显示加载提示
+        function showLoadingTip(message) {
+            const tip = document.createElement('div');
+            tip.id = 'loadingTip';
+            tip.className = 'loading-tip';
+            tip.textContent = message;
+            tip.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 15px 25px;
+                border-radius: 8px;
+                z-index: 2000;
+                font-size: 1.1rem;
+            `;
+            document.body.appendChild(tip);
+        }
+
+        // 隐藏加载提示
+        function hideLoadingTip() {
+            const tip = document.getElementById('loadingTip');
+            if (tip) {
+                tip.remove();
+            }
         }
 
         // 进入特定文件夹
         function enterFolder(folderName) {
+            // 启动视图切换保护
+            viewSwitchProtection.isSwitching = true;
+            viewSwitchProtection.startTime = Date.now();
+            state.isViewSwitching = true;
+
             state.activeFolder = folderName;
             state.searchQuery = ''; // 清空搜索，或者保留看需求，通常进入文件夹想看所有的
             elements.searchInput.value = '';
+            state.currentPage = 1; // 重置分页
 
-            switchView('grid'); // 强制切换到网格视图，修复图片过大的问题
+            // 强制切换到网格视图，这是进入文件夹后的默认视图
+            // 不调用switchView，避免额外的状态重置
+            state.currentView = 'grid';
+
+            // 重新计算过滤
+            filterAndSortImages();
+
+            // 更新按钮状态和面包屑
+            updateBreadcrumb();
+            elements.gridViewBtn.classList.remove('active');
+            elements.folderViewBtn.classList.remove('active');
+            elements.comicViewBtn.classList.remove('active');
+
+            // 显示/隐藏视图
+            elements.masonryView.style.display = 'flex';
+            elements.comicView.style.display = 'none';
+            elements.folderView.style.display = 'none';
+
+            // 重新渲染
+            renderImages();
+
+            // 重置无限滚动
+            setTimeout(() => {
+                setupInfiniteScroll();
+
+                // 在保护期结束后重置状态
+                setTimeout(() => {
+                    state.isViewSwitching = false;
+                    viewSwitchProtection.isSwitching = false;
+                }, viewSwitchProtection.protectionDuration);
+            }, 100);
         }
 
         // 过滤和排序图片
@@ -991,17 +1168,35 @@
 
         // 切换视图
         function switchView(view) {
+            // 记录之前的视图，用于判断是否需要重新过滤
+            const previousView = state.currentView;
+
+            // 启动视图切换保护
+            viewSwitchProtection.isSwitching = true;
+            viewSwitchProtection.startTime = Date.now();
+
+            state.isViewSwitching = true;
             state.currentView = view;
             state.currentPage = 1;
 
-            // 重新计算过滤（因为可能刚刚退出了 activeFolder）
-            filterAndSortImages();
+            // 重新计算过滤的逻辑：
+            // 1. 从文件夹视图切换到其他视图时，需要重新过滤（因为数据结构不同）
+            // 2. 切换到文件夹视图时，需要重新过滤（显示所有图片的分组）
+            // 3. 在activeFolder模式下切换视图时，需要重新应用文件夹过滤
+            const shouldRefilter =
+                previousView === 'folder' || // 从文件夹视图切换出来
+                view === 'folder' || // 切换到文件夹视图
+                state.activeFolder !== null; // 在activeFolder模式下切换
+
+            if (shouldRefilter) {
+                filterAndSortImages();
+            }
 
             // 更新面包屑
             updateBreadcrumb();
 
             // 更新按钮状态
-            // 如果在 activeFolder 模式下，虽然是 grid 布局，但顶部按钮不应显示选中状态，以免混淆
+            // 如果在 activeFolder 模式下，顶部按钮状态逻辑：
             if (state.activeFolder) {
                 elements.gridViewBtn.classList.remove('active');
                 elements.folderViewBtn.classList.remove('active');
@@ -1017,8 +1212,21 @@
             elements.comicView.style.display = view === 'comic' ? 'block' : 'none';
             elements.folderView.style.display = view === 'folder' ? 'block' : 'none';
 
-            // 重新渲染
-            renderImages();
+            // 重新渲染 - 使用双重requestAnimationFrame确保DOM完全更新
+            requestAnimationFrame(() => {
+                renderImages();
+
+                // 确保DOM更新完成后再设置无限滚动
+                requestAnimationFrame(() => {
+                    setupInfiniteScroll();
+
+                    // 在保护期结束后重置状态
+                    setTimeout(() => {
+                        state.isViewSwitching = false;
+                        viewSwitchProtection.isSwitching = false;
+                    }, viewSwitchProtection.protectionDuration);
+                });
+            });
         }
 
         // 更新面包屑导航
@@ -1032,10 +1240,10 @@
             }
         }
 
-        // 渲染图片
+        // 渲染图片 - 优化版本
         function renderImages() {
             const visibleImages = state.filteredImages.slice(0, state.currentPage * state.itemsPerPage);
-            
+
             if (visibleImages.length === 0) {
                 elements.emptyState.classList.remove('hidden');
                 elements.masonryView.classList.add('hidden');
@@ -1044,67 +1252,221 @@
                 elements.imageCount.textContent = '0';
                 return;
             }
-            
+
             elements.emptyState.classList.add('hidden');
             elements.imageCount.textContent = visibleImages.length;
-            
-            if (state.currentView === 'grid') {
-                renderGridView(visibleImages);
-            } else if (state.currentView === 'comic') {
-                renderComicView(visibleImages);
-            } else {
-                // 在文件夹视图中，我们传递所有过滤后的图片，但在内部进行分组
-                // 注意：如果是 activeFolder 模式，逻辑上不会进入 renderFolderView
-                renderFolderView(state.filteredImages);
-            }
+
+            // 使用requestAnimationFrame优化渲染时机
+            requestAnimationFrame(() => {
+                if (state.currentView === 'grid') {
+                    renderGridView(visibleImages);
+                } else if (state.currentView === 'comic') {
+                    renderComicView(visibleImages);
+                } else if (state.currentView === 'folder' && !state.activeFolder) {
+                    // 只有在文件夹视图模式且没有activeFolder时才渲染文件夹视图
+                    renderFolderView(state.filteredImages);
+                } else {
+                    // 如果是activeFolder模式，但意外进入了文件夹视图，强制切换到网格视图
+                    console.warn('检测到activeFolder模式下尝试渲染文件夹视图，自动切换到网格视图');
+                    state.currentView = 'grid';
+                    renderGridView(visibleImages);
+                }
+            });
         }
 
+        // 优化的网格视图渲染
         function renderGridView(images) {
-            elements.masonryView.innerHTML = '';
+            // 使用DocumentFragment批量操作DOM
+            const fragment = document.createDocumentFragment();
 
-            images.forEach((image, index) => {
-                const imageItem = document.createElement('div');
-                imageItem.className = 'image-item';
-                imageItem.innerHTML = `
-                    <img src="${image.url}" alt="${image.name}" loading="lazy" data-index="${index}">
-                    <div class="image-info">
-                        <div class="image-name">${image.name}</div>
-                        <div class="image-path">${image.path}</div>
-                    </div>
-                `;
-                imageItem.querySelector('img').addEventListener('click', () => openFullscreen(index));
-                elements.masonryView.appendChild(imageItem);
+            // 计算全局索引偏移量
+            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
+
+            images.forEach((image, localIndex) => {
+                const globalIndex = startIndex + localIndex;
+                const imageItem = createImageItem(image, globalIndex);
+                fragment.appendChild(imageItem);
             });
+
+            // 一次性更新DOM
+            elements.masonryView.innerHTML = '';
+            elements.masonryView.appendChild(fragment);
 
             elements.masonryView.classList.remove('hidden');
             elements.comicView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
         }
 
-        function renderComicView(images) {
-            elements.comicView.innerHTML = '';
+        // 优化的图片项元素创建 - 支持懒加载和正确的全局索引
+        function createImageItem(image, globalIndex) {
+            const imageItem = document.createElement('div');
+            imageItem.className = 'image-item';
 
-            images.forEach((image, index) => {
-                const imageItem = document.createElement('div');
-                imageItem.className = 'image-item';
-                imageItem.innerHTML = `
-                    <img src="${image.url}" alt="${image.name}" loading="lazy" data-index="${index}">
-                    <div class="image-info">
-                        <div class="image-name">${image.name}</div>
-                        <div class="image-path">${image.path}</div>
-                    </div>
-                `;
-                imageItem.querySelector('img').addEventListener('click', () => openFullscreen(index));
-                elements.comicView.appendChild(imageItem);
+            // 创建图片占位符
+            const img = document.createElement('img');
+            img.alt = image.name;
+            img.dataset.globalIndex = globalIndex; // 使用全局索引
+            img.dataset.src = image.url; // 使用data-src进行懒加载
+            img.loading = 'lazy';
+
+            // 初始显示低质量占位图
+            img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik04NSA2NUgxMTVWMTE1SDg1VjY1WiIgZmlsbD0iI0QxRDFEMSIvPgo8cGF0aCBkPSJNMTAwIDg1TDg1IDEwNUgxMTVMMTAwIDg1WiIgZmlsbD0iI0QxRDFEMSIvPgo8dGV4dCB4PSIxMDAiIHk9IjEzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTk5OSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9IkFyaWFsIj7lm6DmgYXmlbDmjaI8L3RleHQ+Cjwvc3ZnPgo=';
+
+            // 设置懒加载
+            setupLazyLoading(img);
+
+            // 添加图片加载错误处理
+            img.addEventListener('error', function() {
+                this.onerror = null;
+                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik04NSA2NUgxMTVWMTE1SDg1VjY1WiIgZmlsbD0iI0QxRDFEMSIvPgo8cGF0aCBkPSJNMTAwIDg1TDg1IDEwNUgxMTVMMTAwIDg1WiIgZmlsbD0iI0QxRDFEMSIvPgo8dGV4dCB4PSIxMDAiIHk9IjEzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTk5OSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9IkFyaWFsIj7kuK3vvIzlm6DmgYXmlbDmjaI8L3RleHQ+Cjwvc3ZnPgo=';
             });
+
+            // 添加点击事件 - 使用全局索引
+            img.addEventListener('click', () => openFullscreen(globalIndex));
+
+            // 创建图片信息
+            const imageInfo = document.createElement('div');
+            imageInfo.className = 'image-info';
+
+            const imageName = document.createElement('div');
+            imageName.className = 'image-name';
+            imageName.textContent = image.name;
+
+            const imagePath = document.createElement('div');
+            imagePath.className = 'image-path';
+            imagePath.textContent = image.path;
+
+            imageInfo.appendChild(imageName);
+            imageInfo.appendChild(imagePath);
+
+            imageItem.appendChild(img);
+            imageItem.appendChild(imageInfo);
+
+            return imageItem;
+        }
+
+        // 设置图片懒加载
+        function setupLazyLoading(img) {
+            // 如果浏览器原生支持懒加载且图片在视口内，直接加载
+            if ('loading' in HTMLImageElement && isVisible(img)) {
+                img.src = img.dataset.src;
+                return;
+            }
+
+            // 创建Intersection Observer进行懒加载
+            const imageObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const targetImg = entry.target;
+                        if (targetImg.dataset.src) {
+                            // 图片加载完成后移除观察
+                            targetImg.onload = () => {
+                                targetImg.style.opacity = '0';
+                                setTimeout(() => {
+                                    targetImg.style.transition = 'opacity 0.3s';
+                                    targetImg.style.opacity = '1';
+                                }, 50);
+                            };
+
+                            targetImg.src = targetImg.dataset.src;
+                            targetImg.removeAttribute('data-src');
+                            imageObserver.unobserve(targetImg);
+                        }
+                    }
+                });
+            }, {
+                root: null,
+                rootMargin: '50px',
+                threshold: 0.01
+            });
+
+            imageObserver.observe(img);
+        }
+
+        // 检查元素是否在视口内
+        function isVisible(element) {
+            const rect = element.getBoundingClientRect();
+            return (
+                rect.top >= 0 &&
+                rect.left >= 0 &&
+                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+            );
+        }
+
+        // 优化的条漫视图渲染
+        function renderComicView(images) {
+            const fragment = document.createDocumentFragment();
+
+            // 计算全局索引偏移量
+            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
+
+            images.forEach((image, localIndex) => {
+                const globalIndex = startIndex + localIndex;
+                const imageItem = createImageItem(image, globalIndex);
+                fragment.appendChild(imageItem);
+            });
+
+            elements.comicView.innerHTML = '';
+            elements.comicView.appendChild(fragment);
 
             elements.comicView.classList.remove('hidden');
             elements.masonryView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
         }
 
+        // 优化的文件夹视图渲染
         function renderFolderView(images) {
-            // 按文件夹分组
+            // 使用缓存的文件夹数据，避免重复计算
+            let folders;
+            const cacheKey = images.length;
+
+            if (state.folderCache.has(cacheKey)) {
+                folders = state.folderCache.get(cacheKey);
+            } else {
+                folders = groupImagesByFolder(images);
+                state.folderCache.set(cacheKey, folders);
+            }
+
+            // 使用DocumentFragment优化DOM操作
+            const fragment = document.createDocumentFragment();
+
+            // 限制同时渲染的文件夹数量，提升性能
+            const maxFoldersToRender = 20;
+            const folderNames = Object.keys(folders).slice(0, maxFoldersToRender);
+
+            folderNames.forEach(folderName => {
+                const folderItem = createFolderItem(folders[folderName], folderName);
+                fragment.appendChild(folderItem);
+            });
+
+            // 添加"显示更多"提示（如果有更多文件夹）
+            if (Object.keys(folders).length > maxFoldersToRender) {
+                const moreInfo = document.createElement('div');
+                moreInfo.className = 'folder-more-info';
+                moreInfo.style.cssText = `
+                    text-align: center;
+                    padding: 20px;
+                    color: #666;
+                    font-size: 0.9rem;
+                    background: white;
+                    border-radius: 8px;
+                    margin-bottom: 20px;
+                `;
+                moreInfo.textContent = `还有 ${Object.keys(folders).length - maxFoldersToRender} 个文件夹未显示，请使用搜索功能查找`;
+                fragment.appendChild(moreInfo);
+            }
+
+            // 一次性更新DOM
+            elements.folderView.innerHTML = '';
+            elements.folderView.appendChild(fragment);
+
+            elements.folderView.classList.remove('hidden');
+            elements.masonryView.classList.add('hidden');
+        }
+
+        // 按文件夹分组图片
+        function groupImagesByFolder(images) {
             const folders = {};
             images.forEach(image => {
                 const folderPath = image.folder;
@@ -1113,67 +1475,104 @@
                 }
                 folders[folderPath].push(image);
             });
-            
-            elements.folderView.innerHTML = '';
-            
-            Object.keys(folders).forEach(folderName => {
-                const folderItem = document.createElement('div');
-                folderItem.className = 'folder-item';
-                
-                // 1. 头部点击进入单文件夹模式
-                const headerHtml = `
-                    <div class="folder-header">
-                        <div class="folder-name">
-                            <span class="folder-icon">📂</span>
-                            ${folderName}
-                        </div>
-                        <div class="folder-count">${folders[folderName].length} 张图片</div>
-                    </div>
-                `;
-                
-                // 2. 只加载前 10 张图片
-                const previewImages = folders[folderName].slice(0, 10);
-                
-                const imagesHtml = `
-                    <div class="folder-images">
-                        ${previewImages.map((image, index) => `
-                            <div class="folder-image">
-                                <img src="${image.url}" alt="${image.name}" loading="lazy">
-                            </div>
-                        `).join('')}
-                        ${folders[folderName].length > 10 ? 
-                            `<div style="display:flex;align-items:center;justify-content:center;color:#666;font-size:0.9rem;">+${folders[folderName].length - 10}</div>` 
-                            : ''}
-                    </div>
-                `;
-                
-                folderItem.innerHTML = headerHtml + imagesHtml;
-                
-                // 绑定头部点击事件
-                folderItem.querySelector('.folder-header').addEventListener('click', () => {
-                    enterFolder(folderName);
-                });
+            return folders;
+        }
 
-                // 绑定缩略图点击事件 (在文件夹预览模式下点击图片也进入大图)
-                // 注意：这里需要查找该图片在全局 filteredImages 中的索引
-                folderItem.querySelectorAll('.folder-image img').forEach((img, i) => {
-                    const imgName = previewImages[i].name;
-                    // 找到这个图片在当前全局列表中的真实索引
-                    const globalIndex = state.filteredImages.findIndex(item => item.name === imgName && item.folder === folderName);
-                    
-                    if(globalIndex !== -1) {
-                        img.addEventListener('click', (e) => {
-                            e.stopPropagation(); // 防止冒泡触发 header 的点击
-                            openFullscreen(globalIndex);
-                        });
-                    }
-                });
-                
-                elements.folderView.appendChild(folderItem);
+        // 创建文件夹项元素
+        function createFolderItem(folderImages, folderName) {
+            const folderItem = document.createElement('div');
+            folderItem.className = 'folder-item';
+
+            // 创建文件夹头部
+            const header = document.createElement('div');
+            header.className = 'folder-header';
+
+            const folderNameDiv = document.createElement('div');
+            folderNameDiv.className = 'folder-name';
+
+            const folderIcon = document.createElement('span');
+            folderIcon.className = 'folder-icon';
+            folderIcon.textContent = '📂';
+
+            const folderNameText = document.createElement('span');
+            folderNameText.textContent = folderName;
+
+            const folderCount = document.createElement('div');
+            folderCount.className = 'folder-count';
+            folderCount.textContent = `${folderImages.length} 张图片`;
+
+            folderNameDiv.appendChild(folderIcon);
+            folderNameDiv.appendChild(folderNameText);
+            header.appendChild(folderNameDiv);
+            header.appendChild(folderCount);
+
+            // 创建图片预览容器
+            const imagesContainer = document.createElement('div');
+            imagesContainer.className = 'folder-images';
+
+            // 只加载前5张图片（减少预览数量提升性能）
+            const previewImages = folderImages.slice(0, 5);
+            const moreCount = folderImages.length - previewImages.length;
+
+            previewImages.forEach((image, index) => {
+                const folderImage = createFolderImage(image, folderName);
+                imagesContainer.appendChild(folderImage);
             });
-            
-            elements.folderView.classList.remove('hidden');
-            elements.masonryView.classList.add('hidden');
+
+            // 如果还有更多图片，添加提示
+            if (moreCount > 0) {
+                const moreInfo = document.createElement('div');
+                moreInfo.style.cssText = `
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #666;
+                    font-size: 0.9rem;
+                    aspect-ratio: 1;
+                `;
+                moreInfo.textContent = `+${moreCount}`;
+                imagesContainer.appendChild(moreInfo);
+            }
+
+            // 组装文件夹项
+            folderItem.appendChild(header);
+            folderItem.appendChild(imagesContainer);
+
+            // 绑定头部点击事件
+            header.addEventListener('click', () => {
+                enterFolder(folderName);
+            });
+
+            return folderItem;
+        }
+
+        // 创建文件夹图片预览
+        function createFolderImage(image, folderName) {
+            const folderImage = document.createElement('div');
+            folderImage.className = 'folder-image';
+
+            const img = document.createElement('img');
+            img.src = image.url;
+            img.alt = image.name;
+            img.loading = 'lazy';
+
+            // 添加图片加载错误处理
+            img.addEventListener('error', function() {
+                this.onerror = null;
+                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgdmlld0JveD0iMCAwIDEyMCAxMjAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik01MCA0MEg3MFo4MFY4MEg1MFY0MFoiIGZpbGw9IiNEMUQxRDEiLz4KPHRleHQgeD0iNjAiIHk9IjkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjOTk5OTk5IiBmb250LXNpemU9IjEyIiBmb250LWZhbWlseT0iQXJpYWwiPuS4re+8jOWbguOBruS7peWFpeW9kzwvdGV4dD4KPC9zdmc+';
+            });
+
+            // 绑定点击事件
+            img.addEventListener('click', (e) => {
+                e.stopPropagation(); // 防止冒泡触发 header 的点击
+                const globalIndex = state.filteredImages.findIndex(item => item.fileKey === image.fileKey);
+                if (globalIndex !== -1) {
+                    openFullscreen(globalIndex);
+                }
+            });
+
+            folderImage.appendChild(img);
+            return folderImage;
         }
 
         function openFullscreen(index) {
@@ -1224,14 +1623,191 @@
             return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 100;
         }
 
-        function loadMoreImages() {
-            if (state.currentPage * state.itemsPerPage >= state.filteredImages.length) return;
-            elements.loadingIndicator.classList.remove('hidden');
+        // 设置无限滚动监听器 - 修复版本
+        function setupInfiniteScroll() {
+            // 先移除旧的触发器
+            const oldTrigger = document.getElementById('loadTrigger');
+            if (oldTrigger) {
+                oldTrigger.remove();
+            }
+
+            // 断开旧的观察器
+            if (state.infiniteScrollObserver) {
+                state.infiniteScrollObserver.disconnect();
+            }
+
+            // 文件夹视图不支持无限滚动，因为它不分页
+            if (state.currentView === 'folder' && !state.activeFolder) {
+                return; // 文件夹视图不需要无限滚动
+            }
+
+            // 检查是否还有更多内容
+            const hasMoreContent = state.currentPage * state.itemsPerPage < state.filteredImages.length;
+
+            // 如果没有更多内容，直接返回
+            if (!hasMoreContent) {
+                return;
+            }
+
+            // 创建加载指示器
+            const loadTrigger = document.createElement('div');
+            loadTrigger.id = 'loadTrigger';
+            loadTrigger.style.cssText = `
+                height: 100px;
+                min-height: 100px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #666;
+                font-size: 0.9rem;
+                pointer-events: none;
+                width: 100%;
+                margin-top: 20px;
+                clear: both;
+            `;
+            loadTrigger.innerHTML = '<span>滚动或点击加载更多...</span>';
+
+            // 根据当前视图选择合适的容器
+            let container;
+            if (state.currentView === 'grid') {
+                container = elements.masonryView;
+            } else if (state.currentView === 'comic') {
+                container = elements.comicView;
+            } else {
+                // 在activeFolder模式下，使用网格视图容器
+                container = elements.masonryView;
+            }
+
+            if (container && container.style.display !== 'none') {
+                container.appendChild(loadTrigger);
+            } else {
+                document.body.appendChild(loadTrigger);
+            }
+
+            // 移除自动滚动到触发器的逻辑，避免意外滚动
+            // setTimeout(() => {
+            //     if (!isVisible(loadTrigger)) {
+            //         // 如果触发器不可见，滚动到触发器位置
+            //         loadTrigger.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            //     }
+            // }, 100);
+
+            // 使用Intersection Observer监听滚动到底部
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting && !state.isLoading && hasMoreContent) {
+                        // 检查是否在保护期内
+                        const now = Date.now();
+                        const isInProtectionPeriod = viewSwitchProtection.isSwitching &&
+                            (now - viewSwitchProtection.startTime) < viewSwitchProtection.protectionDuration;
+
+                        if (!isInProtectionPeriod) {
+                            loadMoreImagesOptimized();
+                        } else {
+                            console.log('在视图切换保护期内，跳过Intersection Observer触发的自动加载');
+                        }
+                    }
+                });
+            }, {
+                root: null,
+                rootMargin: '100px', // 预加载距离
+                threshold: 0.01 // 降低阈值，更容易触发
+            });
+
+            // 观察加载触发器
+            observer.observe(loadTrigger);
+
+            // 清理函数
+            state.infiniteScrollObserver = observer;
+
+            // 添加点击加载功能作为备选方案
+            loadTrigger.style.cursor = 'pointer';
+            loadTrigger.style.pointerEvents = 'auto';
+            loadTrigger.addEventListener('click', () => {
+                if (!state.isLoading && hasMoreContent) {
+                    loadMoreImagesOptimized();
+                }
+            });
+
+            // 检查是否需要立即加载更多内容
+            // 使用更强的保护机制避免在视图切换时自动触发
             setTimeout(() => {
+                const now = Date.now();
+                const isInProtectionPeriod = viewSwitchProtection.isSwitching &&
+                    (now - viewSwitchProtection.startTime) < viewSwitchProtection.protectionDuration;
+
+                if (hasMoreContent && !state.isLoading && !state.isViewSwitching && !isInProtectionPeriod) {
+                    const pageHeight = document.documentElement.scrollHeight;
+                    const viewportHeight = window.innerHeight;
+                    const isPageScrollable = pageHeight > viewportHeight + 50;
+
+                    // 只有在页面内容确实明显不足时才自动加载
+                    if (!isPageScrollable && pageHeight < viewportHeight * 0.4) {
+                        console.log('页面内容明显不足，自动加载更多...');
+                        loadMoreImagesOptimized();
+                    }
+                } else if (isInProtectionPeriod) {
+                    console.log('在视图切换保护期内，跳过自动加载');
+                }
+            }, 800);
+        }
+
+        // 优化的加载更多图片
+        function loadMoreImagesOptimized() {
+            if (state.currentPage * state.itemsPerPage >= state.filteredImages.length) {
+                // 移除加载触发器，因为没有更多内容了
+                const loadTrigger = document.getElementById('loadTrigger');
+                if (loadTrigger) {
+                    loadTrigger.remove();
+                }
+                return;
+            }
+
+            // 防止重复加载
+            if (state.isLoading) return;
+
+            state.isLoading = true;
+            elements.loadingIndicator.classList.remove('hidden');
+
+            // 临时隐藏触发器，避免重复点击
+            const loadTrigger = document.getElementById('loadTrigger');
+            if (loadTrigger) {
+                loadTrigger.innerHTML = '<span>正在加载...</span>';
+                loadTrigger.style.pointerEvents = 'none';
+            }
+
+            // 使用requestAnimationFrame优化性能
+            requestAnimationFrame(() => {
                 state.currentPage++;
+
+                // 调用统一的renderImages函数，让它处理所有视图模式的渲染
                 renderImages();
+
                 elements.loadingIndicator.classList.add('hidden');
-            }, 500);
+                state.isLoading = false;
+
+                // 检查是否还有更多内容
+                const hasMore = state.currentPage * state.itemsPerPage < state.filteredImages.length;
+
+                if (!hasMore) {
+                    // 没有更多内容，移除触发器
+                    const trigger = document.getElementById('loadTrigger');
+                    if (trigger) {
+                        trigger.innerHTML = '<span>已加载全部图片</span>';
+                        trigger.style.pointerEvents = 'none';
+                    }
+                } else {
+                    // 重新设置无限滚动，确保新的触发器位置正确
+                    setTimeout(() => {
+                        setupInfiniteScroll();
+                    }, 100);
+                }
+            });
+        }
+
+        // 旧版本保留作为备用
+        function loadMoreImages() {
+            loadMoreImagesOptimized();
         }
 
         function debounce(func, wait) {
