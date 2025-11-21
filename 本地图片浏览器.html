@@ -673,10 +673,7 @@
             <input type="file" id="folderInput" webkitdirectory directory multiple>
         </div>
 
-        <button id="debugBtn" style="display: none;" onclick="validateAllImageUrls()">
-            <i>🔍</i> 调试URL
-        </button>
-        
+          
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="搜索图片名称..." disabled>
         </div>
@@ -1461,9 +1458,6 @@
             elements.folderViewBtn.disabled = false;
             elements.comicViewBtn.disabled = false;
 
-            // 显示调试按钮
-            document.getElementById('debugBtn').style.display = 'flex';
-
             // 显示加载提示
             showLoadingTip(`正在处理 ${imageFiles.length} 张图片的基本信息...`);
 
@@ -2041,33 +2035,15 @@
             // 使用DocumentFragment优化DOM操作
             const fragment = document.createDocumentFragment();
 
-            // 限制同时渲染的文件夹数量，提升性能
-            const maxFoldersToRender = 20;
-            const folderNames = Object.keys(folders).slice(0, maxFoldersToRender);
+            // 显示所有文件夹，不限制数量
+            const folderNames = Object.keys(folders);
 
-            console.log('将要渲染的文件夹:', folderNames);
+            console.log('将要渲染所有文件夹:', folderNames);
 
             folderNames.forEach(folderName => {
                 const folderItem = createFolderItem(folders[folderName], folderName);
                 fragment.appendChild(folderItem);
             });
-
-            // 添加"显示更多"提示（如果有更多文件夹）
-            if (Object.keys(folders).length > maxFoldersToRender) {
-                const moreInfo = document.createElement('div');
-                moreInfo.className = 'folder-more-info';
-                moreInfo.style.cssText = `
-                    text-align: center;
-                    padding: 20px;
-                    color: #666;
-                    font-size: 0.9rem;
-                    background: white;
-                    border-radius: 8px;
-                    margin-bottom: 20px;
-                `;
-                moreInfo.textContent = `还有 ${Object.keys(folders).length - maxFoldersToRender} 个文件夹未显示，请使用搜索功能查找`;
-                fragment.appendChild(moreInfo);
-            }
 
             // 一次性更新DOM
             elements.folderView.innerHTML = '';
