@@ -931,6 +931,13 @@
             state.folderCache.clear();
             state.loadedImages.clear();
 
+            // 清理文件夹Observer
+            cleanupFolderObservers();
+            if (state.folderImageObserver) {
+                state.folderImageObserver.disconnect();
+                state.folderImageObserver = null;
+            }
+
             // 清理所有定时器
             clearAllTimers();
 
@@ -1827,6 +1834,12 @@
                 }
             });
 
+            // 设置容器为固定高度，避免页面高度突然变化导致的跳跃
+            const currentHeight = elements.masonryView.scrollHeight;
+            if (currentHeight > 0) {
+                elements.masonryView.style.minHeight = currentHeight + 'px';
+            }
+
             // 一次性更新DOM
             elements.masonryView.innerHTML = '';
             elements.masonryView.appendChild(fragment);
@@ -1835,21 +1848,27 @@
             elements.comicView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
 
-            // 更精确的滚动位置恢复逻辑
+            // 改进的滚动位置恢复逻辑
             requestAnimationFrame(() => {
+                // 移除临时设置的固定高度
+                elements.masonryView.style.minHeight = '';
+
                 // 获取新的页面高度
                 const newPageHeight = document.documentElement.scrollHeight;
 
-                // 只有在以下情况下才恢复滚动位置：
-                // 1. 不在底部（有足够的下方空间）
-                // 2. 新页面高度大于原来的滚动位置（避免无效滚动）
-                if (!isNearBottom && newPageHeight > scrollPosition) {
-                    window.scrollTo({
-                        top: scrollPosition,
-                        left: 0,
-                        behavior: 'instant' // 使用instant避免动画跳跃
-                    });
-                    console.log('网格视图滚动位置已恢复:', scrollPosition);
+                // 智能滚动位置恢复：
+                // 1. 如果不在底部且新页面足够高，恢复原位置
+                // 2. 如果新页面高度不足以到达原位置，滚动到合理位置
+                if (!isNearBottom) {
+                    const targetScrollPosition = Math.min(scrollPosition, newPageHeight - window.innerHeight - 100);
+                    if (targetScrollPosition > 0) {
+                        window.scrollTo({
+                            top: targetScrollPosition,
+                            left: 0,
+                            behavior: 'instant' // 使用instant避免动画跳跃
+                        });
+                        console.log('网格视图滚动位置已恢复:', targetScrollPosition);
+                    }
                 }
             });
         }
@@ -1992,11 +2011,17 @@
 
             // 为每个图片创建元素，过滤掉无效的图片项
             images.forEach((image) => {
-                const imageItem = createImageItem(image);
+                const imageItem = createImageItem(image, 'comic');
                 if (imageItem) {
                     fragment.appendChild(imageItem);
                 }
             });
+
+            // 设置容器为固定高度，避免页面高度突然变化导致的跳跃
+            const currentHeight = elements.comicView.scrollHeight;
+            if (currentHeight > 0) {
+                elements.comicView.style.minHeight = currentHeight + 'px';
+            }
 
             elements.comicView.innerHTML = '';
             elements.comicView.appendChild(fragment);
@@ -2005,21 +2030,25 @@
             elements.masonryView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
 
-            // 更精确的滚动位置恢复逻辑
+            // 改进的滚动位置恢复逻辑
             requestAnimationFrame(() => {
+                // 移除临时设置的固定高度
+                elements.comicView.style.minHeight = '';
+
                 // 获取新的页面高度
                 const newPageHeight = document.documentElement.scrollHeight;
 
-                // 只有在以下情况下才恢复滚动位置：
-                // 1. 不在底部（有足够的下方空间）
-                // 2. 新页面高度大于原来的滚动位置（避免无效滚动）
-                if (!isNearBottom && newPageHeight > scrollPosition) {
-                    window.scrollTo({
-                        top: scrollPosition,
-                        left: 0,
-                        behavior: 'instant' // 使用instant避免动画跳跃
-                    });
-                    console.log('条漫视图滚动位置已恢复:', scrollPosition);
+                // 智能滚动位置恢复
+                if (!isNearBottom) {
+                    const targetScrollPosition = Math.min(scrollPosition, newPageHeight - window.innerHeight - 100);
+                    if (targetScrollPosition > 0) {
+                        window.scrollTo({
+                            top: targetScrollPosition,
+                            left: 0,
+                            behavior: 'instant' // 使用instant避免动画跳跃
+                        });
+                        console.log('条漫视图滚动位置已恢复:', targetScrollPosition);
+                    }
                 }
             });
         }
@@ -2028,29 +2057,37 @@
         function renderFolderView(images, scrollPosition, isNearBottom) {
             console.log('renderFolderView被调用，传入图片数量:', images.length);
 
-            // 使用缓存的文件夹数据，避免重复计算
-            let folders;
-            const cacheKey = images.length;
+            // 优化缓存键：使用图片路径和大小组合作为哈希
+            const cacheKey = images.slice(0, 10).map(img => img.path + img.file.size).join('|') + '_' + images.length;
 
+            let folders;
             if (state.folderCache.has(cacheKey)) {
                 folders = state.folderCache.get(cacheKey);
-                console.log('使用缓存的文件夹数据');
+                console.log('使用优化的缓存数据');
             } else {
                 folders = groupImagesByFolder(images);
                 state.folderCache.set(cacheKey, folders);
+                // 限制缓存大小，避免内存泄漏
+                if (state.folderCache.size > 5) {
+                    const firstKey = state.folderCache.keys().next().value;
+                    state.folderCache.delete(firstKey);
+                }
                 console.log('重新计算文件夹数据，文件夹数量:', Object.keys(folders).length);
             }
 
+            // 清理旧的Observer
+            cleanupFolderObservers();
+
             // 使用DocumentFragment优化DOM操作
             const fragment = document.createDocumentFragment();
+            state.activeFolderObservers = []; // 跟踪当前Observer
 
             // 显示所有文件夹，不限制数量
             const folderNames = Object.keys(folders);
-
             console.log('将要渲染所有文件夹:', folderNames);
 
             folderNames.forEach(folderName => {
-                const folderItem = createFolderItem(folders[folderName], folderName);
+                const folderItem = createFolderItemOptimized(folders[folderName], folderName);
                 fragment.appendChild(folderItem);
             });
 
@@ -2085,6 +2122,16 @@
             console.log('文件夹视图渲染完成');
         }
 
+        // 清理文件夹Observer
+        function cleanupFolderObservers() {
+            if (state.activeFolderObservers) {
+                state.activeFolderObservers.forEach(observer => {
+                    if (observer) observer.disconnect();
+                });
+                state.activeFolderObservers = [];
+            }
+        }
+
         // 按文件夹分组图片
         function groupImagesByFolder(images) {
             const folders = {};
@@ -2096,6 +2143,151 @@
                 folders[folderPath].push(image);
             });
             return folders;
+        }
+
+        // 优化的文件夹项创建函数
+        function createFolderItemOptimized(folderImages, folderName) {
+            const folderItem = document.createElement('div');
+            folderItem.className = 'folder-item';
+
+            // 创建文件夹头部
+            const header = document.createElement('div');
+            header.className = 'folder-header';
+
+            const folderNameDiv = document.createElement('div');
+            folderNameDiv.className = 'folder-name';
+
+            const folderIcon = document.createElement('span');
+            folderIcon.className = 'folder-icon';
+            folderIcon.textContent = '📂';
+
+            const folderNameText = document.createElement('span');
+            folderNameText.textContent = folderName;
+
+            const folderCount = document.createElement('div');
+            folderCount.className = 'folder-count';
+            folderCount.textContent = `${folderImages.length} 张图片`;
+
+            folderNameDiv.appendChild(folderIcon);
+            folderNameDiv.appendChild(folderNameText);
+            header.appendChild(folderNameDiv);
+            header.appendChild(folderCount);
+
+            // 创建图片预览容器
+            const imagesContainer = document.createElement('div');
+            imagesContainer.className = 'folder-images';
+
+            // 减少预览图片数量到3张，提升性能
+            const previewImages = folderImages.slice(0, 3);
+            const moreCount = folderImages.length - previewImages.length;
+
+            previewImages.forEach((image, index) => {
+                const folderImage = createFolderImageOptimized(image, folderName);
+                imagesContainer.appendChild(folderImage);
+            });
+
+            // 如果还有更多图片，添加提示
+            if (moreCount > 0) {
+                const moreInfo = document.createElement('div');
+                moreInfo.style.cssText = `
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #666;
+                    font-size: 0.9rem;
+                    aspect-ratio: 1;
+                `;
+                moreInfo.textContent = `+${moreCount}`;
+                imagesContainer.appendChild(moreInfo);
+            }
+
+            // 组装文件夹项
+            folderItem.appendChild(header);
+            folderItem.appendChild(imagesContainer);
+
+            // 绑定头部点击事件 - 使用事件委托优化
+            header.addEventListener('click', () => {
+                enterFolder(folderName);
+            });
+
+            return folderItem;
+        }
+
+        // 优化的文件夹图片创建函数 - 使用单个Observer
+        function createFolderImageOptimized(image, folderName) {
+            const folderImage = document.createElement('div');
+            folderImage.className = 'folder-image';
+
+            // 添加占位符
+            const placeholder = document.createElement('div');
+            placeholder.className = 'image-placeholder';
+            placeholder.textContent = '加载中...';
+            folderImage.appendChild(placeholder);
+
+            // 添加图片
+            const img = document.createElement('img');
+            img.dataset.fileKey = getImageKey(image.file);
+            img.dataset.lazy = "true";
+            img.alt = image.name;
+
+            img.onload = function() {
+                placeholder.remove();
+            };
+
+            img.onerror = function() {
+                placeholder.innerHTML = '❌';
+            };
+
+            folderImage.appendChild(img);
+
+            // 使用统一的Observer进行懒加载
+            setupFolderImageLazyLoad(img, placeholder, image);
+
+            return folderImage;
+        }
+
+        // 统一的文件夹图片懒加载Observer
+        function setupFolderImageLazyLoad(img, placeholder, imageData) {
+            // 创建单个全局Observer用于所有文件夹图片
+            if (!state.folderImageObserver) {
+                state.folderImageObserver = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const targetImg = entry.target;
+                            const targetPlaceholder = targetImg.previousSibling;
+
+                            // 检查缓存中是否已有URL
+                            let imageUrl = imageData.url;
+                            if (!imageUrl) {
+                                imageUrl = getImageUrl(imageData.file);
+                                if (imageUrl) {
+                                    imageData.url = imageUrl;
+                                }
+                            }
+
+                            if (imageUrl) {
+                                targetImg.src = imageUrl;
+                                targetPlaceholder.remove();
+                            } else {
+                                targetPlaceholder.innerHTML = '❌';
+                            }
+
+                            // 停止观察此图片
+                            state.folderImageObserver.unobserve(targetImg);
+                        }
+                    });
+                }, {
+                    root: null,
+                    rootMargin: '50px', // 减少预加载距离
+                    threshold: 0.1
+                });
+
+                // 保存Observer以便清理
+                state.activeFolderObservers.push(state.folderImageObserver);
+            }
+
+            // 观察当前图片
+            state.folderImageObserver.observe(img);
         }
 
         // 创建文件夹项元素
@@ -2479,12 +2671,23 @@
 
             console.log('开始加载更多图片，当前页:', state.currentPage);
 
+            // 保存当前滚动位置，避免DOM更新导致的跳跃
+            const currentScrollPosition = window.scrollY;
+            const scrollThreshold = 200;
+            const isNearBottom = (window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - scrollThreshold;
+
             // 使用requestAnimationFrame优化性能
             requestAnimationFrame(() => {
                 state.currentPage++;
 
-                // 调用统一的renderImages函数，让它处理所有视图模式的渲染
-                renderImages();
+                // 直接调用具体视图的渲染函数，避免renderImages的滚动位置保存干扰
+                const visibleImages = state.filteredImages.slice(0, state.currentPage * state.itemsPerPage);
+
+                if (state.currentView === 'grid') {
+                    renderGridViewWithScrollFix(visibleImages, currentScrollPosition, isNearBottom);
+                } else if (state.currentView === 'comic') {
+                    renderComicViewWithScrollFix(visibleImages, currentScrollPosition, isNearBottom);
+                }
 
                 elements.loadingIndicator.classList.add('hidden');
                 state.isLoading = false;
@@ -2508,6 +2711,86 @@
 
                 console.log('加载更多图片完成，当前页:', state.currentPage, '总图片数:', state.filteredImages.length);
             });
+        }
+
+        // 带滚动修复的网格视图渲染 - 专门用于无限滚动
+        function renderGridViewWithScrollFix(images, scrollPosition, isNearBottom) {
+            elements.emptyState.classList.add('hidden');
+            elements.imageCount.textContent = images.length;
+
+            // 获取当前容器中的现有内容
+            const existingContent = elements.masonryView.innerHTML;
+            const hasExistingContent = existingContent.trim() !== '';
+
+            // 如果没有现有内容，使用完整的渲染流程
+            if (!hasExistingContent) {
+                renderGridView(images, scrollPosition, isNearBottom);
+                return;
+            }
+
+            // 使用DocumentFragment批量操作DOM
+            const fragment = document.createDocumentFragment();
+            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
+            const newImages = images.slice(startIndex);
+
+            // 为新增图片创建元素
+            newImages.forEach((image) => {
+                const imageItem = createImageItem(image);
+                if (imageItem) {
+                    fragment.appendChild(imageItem);
+                }
+            });
+
+            // 追加新内容到现有容器
+            elements.masonryView.appendChild(fragment);
+
+            // 确保正确的显示状态
+            elements.masonryView.classList.remove('hidden');
+            elements.comicView.classList.add('hidden');
+            elements.folderView.classList.add('hidden');
+
+            // 无限滚动时不需要恢复滚动位置，保持用户当前位置
+            console.log('网格视图追加渲染完成，保持当前位置');
+        }
+
+        // 带滚动修复的条漫视图渲染 - 专门用于无限滚动
+        function renderComicViewWithScrollFix(images, scrollPosition, isNearBottom) {
+            elements.emptyState.classList.add('hidden');
+            elements.imageCount.textContent = images.length;
+
+            // 获取当前容器中的现有内容
+            const existingContent = elements.comicView.innerHTML;
+            const hasExistingContent = existingContent.trim() !== '';
+
+            // 如果没有现有内容，使用完整的渲染流程
+            if (!hasExistingContent) {
+                renderComicView(images, scrollPosition, isNearBottom);
+                return;
+            }
+
+            // 使用DocumentFragment批量操作DOM
+            const fragment = document.createDocumentFragment();
+            const startIndex = (state.currentPage - 1) * state.itemsPerPage;
+            const newImages = images.slice(startIndex);
+
+            // 为新增图片创建元素
+            newImages.forEach((image) => {
+                const imageItem = createImageItem(image, 'comic');
+                if (imageItem) {
+                    fragment.appendChild(imageItem);
+                }
+            });
+
+            // 追加新内容到现有容器
+            elements.comicView.appendChild(fragment);
+
+            // 确保正确的显示状态
+            elements.comicView.classList.remove('hidden');
+            elements.masonryView.classList.add('hidden');
+            elements.folderView.classList.add('hidden');
+
+            // 无限滚动时不需要恢复滚动位置，保持用户当前位置
+            console.log('条漫视图追加渲染完成，保持当前位置');
         }
 
         // 旧版本保留作为备用
