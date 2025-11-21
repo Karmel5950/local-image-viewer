@@ -2696,11 +2696,43 @@
                 const hasMore = state.currentPage * state.itemsPerPage < state.filteredImages.length;
 
                 if (!hasMore) {
-                    // 没有更多内容，移除触发器
+                    // 没有更多内容，创建完成状态的触发器
                     const trigger = document.getElementById('loadTrigger');
                     if (trigger) {
                         trigger.innerHTML = '<span>已加载全部图片</span>';
                         trigger.style.pointerEvents = 'none';
+                    } else {
+                        // 如果没有触发器，创建一个
+                        const finalTrigger = document.createElement('div');
+                        finalTrigger.id = 'loadTrigger';
+                        finalTrigger.style.cssText = `
+                            height: 100px;
+                            min-height: 100px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            color: #666;
+                            font-size: 0.9rem;
+                            pointer-events: none;
+                            width: 100%;
+                            margin-top: 20px;
+                            clear: both;
+                        `;
+                        finalTrigger.innerHTML = '<span>已加载全部图片</span>';
+
+                        // 添加到合适的容器
+                        let container;
+                        if (state.currentView === 'grid') {
+                            container = elements.masonryView;
+                        } else if (state.currentView === 'comic') {
+                            container = elements.comicView;
+                        } else {
+                            container = elements.masonryView;
+                        }
+
+                        if (container && container.style.display !== 'none') {
+                            container.appendChild(finalTrigger);
+                        }
                     }
                 } else {
                     // 重新设置无限滚动，确保新的触发器位置正确
@@ -2718,16 +2750,6 @@
             elements.emptyState.classList.add('hidden');
             elements.imageCount.textContent = images.length;
 
-            // 获取当前容器中的现有内容
-            const existingContent = elements.masonryView.innerHTML;
-            const hasExistingContent = existingContent.trim() !== '';
-
-            // 如果没有现有内容，使用完整的渲染流程
-            if (!hasExistingContent) {
-                renderGridView(images, scrollPosition, isNearBottom);
-                return;
-            }
-
             // 使用DocumentFragment批量操作DOM
             const fragment = document.createDocumentFragment();
             const startIndex = (state.currentPage - 1) * state.itemsPerPage;
@@ -2740,6 +2762,12 @@
                     fragment.appendChild(imageItem);
                 }
             });
+
+            // 在追加新内容前，先移除现有的loadTrigger
+            const existingTrigger = document.getElementById('loadTrigger');
+            if (existingTrigger) {
+                existingTrigger.remove();
+            }
 
             // 追加新内容到现有容器
             elements.masonryView.appendChild(fragment);
@@ -2758,16 +2786,6 @@
             elements.emptyState.classList.add('hidden');
             elements.imageCount.textContent = images.length;
 
-            // 获取当前容器中的现有内容
-            const existingContent = elements.comicView.innerHTML;
-            const hasExistingContent = existingContent.trim() !== '';
-
-            // 如果没有现有内容，使用完整的渲染流程
-            if (!hasExistingContent) {
-                renderComicView(images, scrollPosition, isNearBottom);
-                return;
-            }
-
             // 使用DocumentFragment批量操作DOM
             const fragment = document.createDocumentFragment();
             const startIndex = (state.currentPage - 1) * state.itemsPerPage;
@@ -2780,6 +2798,12 @@
                     fragment.appendChild(imageItem);
                 }
             });
+
+            // 在追加新内容前，先移除现有的loadTrigger
+            const existingTrigger = document.getElementById('loadTrigger');
+            if (existingTrigger) {
+                existingTrigger.remove();
+            }
 
             // 追加新内容到现有容器
             elements.comicView.appendChild(fragment);
