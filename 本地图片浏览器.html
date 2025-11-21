@@ -1629,6 +1629,15 @@
             // 重新渲染
             renderImages();
 
+            // 滚动到页面顶部
+            setTimeout(() => {
+                window.scrollTo({
+                    top: 0,
+                    left: 0,
+                    behavior: 'smooth'
+                });
+            }, 200);
+
             // 重置无限滚动
             setTimeout(() => {
                 setupInfiniteScroll();
