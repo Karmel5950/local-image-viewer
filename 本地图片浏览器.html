@@ -933,10 +933,7 @@
 
             // 清理文件夹Observer
             cleanupFolderObservers();
-            if (state.folderImageObserver) {
-                state.folderImageObserver.disconnect();
-                state.folderImageObserver = null;
-            }
+            // 注意：不清理folderImageObserver，让它在页面生命周期内持续工作
 
             // 清理所有定时器
             clearAllTimers();
@@ -1279,9 +1276,6 @@
 
             elements.folderViewBtn.addEventListener('click', () => {
                 // 文件夹视图：重置所有过滤状态，显示所有文件夹分组
-                state.activeFolder = null; // 重置文件夹过滤
-                state.searchQuery = ''; // 清空搜索
-                elements.searchInput.value = '';
                 switchView('folder');
             });
 
@@ -1298,9 +1292,7 @@
             // 面包屑导航点击
             elements.breadcrumbAll.addEventListener('click', () => {
                 state.activeFolder = null;
-                // 返回到之前的视图模式，通常是文件夹视图或总网格视图
-                // 这里逻辑：如果之前是在文件夹里，点击返回通常是回到文件夹列表
-                switchView('folder'); 
+                switchView('folder');
             });
 
             // 全屏查看与交互
@@ -1456,6 +1448,18 @@
                 clearUrlCache();
                 state.folderCache.clear();
                 state.loadedImages.clear();
+
+                // 安全清理文件夹图片Observer - 只有在真正需要时才完全重置
+                if (state.folderImageObserver && state.images.length > 0) {
+                    // 检查是否真的是不同的文件夹集合
+                    const hasOldImages = state.images.length > 0;
+                    if (hasOldImages) {
+                        state.folderImageObserver.disconnect();
+                        state.folderImageObserver = null;
+                        console.log('清理旧的文件夹图片Observer，准备加载新文件夹');
+                    }
+                }
+
                 console.log('✅ 已清理旧的图片缓存，准备加载新文件夹');
             }, 100);
 
@@ -1715,7 +1719,11 @@
             // 文件夹视图不需要过滤，应该显示所有图片的分组
             // 其他视图需要应用当前的过滤条件
             if (view === 'folder') {
-                console.log('切换到文件夹视图，不需要过滤，使用所有图片数据');
+                console.log('切换到文件夹视图，重置所有过滤状态');
+                // 统一重置所有过滤状态，确保无论从哪个入口进入都一致
+                state.activeFolder = null;
+                state.searchQuery = '';
+                elements.searchInput.value = '';
                 // 不需要调用filterAndSortImages，让renderImages使用state.images
             } else {
                 console.log('切换到其他视图，应用当前过滤条件');
@@ -2084,7 +2092,7 @@
 
             // 显示所有文件夹，不限制数量
             const folderNames = Object.keys(folders);
-            console.log('将要渲染所有文件夹:', folderNames);
+            console.log('文件夹视图渲染：将要渲染', folderNames.length, '个文件夹');
 
             folderNames.forEach(folderName => {
                 const folderItem = createFolderItemOptimized(folders[folderName], folderName);
@@ -2120,13 +2128,147 @@
             });
 
             console.log('文件夹视图渲染完成');
+
+            // 添加调试功能：在控制台中可以手动检查Observer状态
+            window.debugFolderObservers = function() {
+                console.log('🔍 调试文件夹Observer状态:');
+                console.log('- activeFolderObservers数量:', state.activeFolderObservers ? state.activeFolderObservers.length : 0);
+                console.log('- folderImageObserver存在:', !!state.folderImageObserver);
+
+                // 检查文件夹视图中的图片元素
+                const folderImages = document.querySelectorAll('.folder-image img');
+                console.log('- 文件夹视图中的图片数量:', folderImages.length);
+
+                folderImages.forEach((img, index) => {
+                    console.log(`  图片${index + 1}:`, {
+                        name: img.dataset.debugName || img.alt,
+                        src: img.src ? '已加载' : '未加载',
+                        inDOM: document.contains(img),
+                        hasLazyAttribute: img.dataset.lazy === 'true'
+                    });
+                });
+
+                // 检查占位符
+                const placeholders = document.querySelectorAll('.folder-image .image-placeholder');
+                console.log('- 占位符数量:', placeholders.length);
+
+                return {
+                    observerCount: state.activeFolderObservers ? state.activeFolderObservers.length : 0,
+                    imageCount: folderImages.length,
+                    placeholderCount: placeholders.length
+                };
+            };
+
+            // 添加强制加载功能
+            window.forceLoadFolderImages = function() {
+                console.log('🚀 强制加载所有文件夹图片');
+                const folderImages = document.querySelectorAll('.folder-image img');
+
+                folderImages.forEach((img) => {
+                    const imageDataName = img.dataset.debugName;
+                    if (imageDataName) {
+                        // 从images数组中找到对应的数据
+                        const imageData = state.images.find(img => img.name === imageDataName);
+                        if (imageData) {
+                            console.log('强制加载图片:', imageDataName);
+                            const imageUrl = getImageUrl(imageData.file);
+                            if (imageUrl) {
+                                img.src = imageUrl;
+                                // 移除占位符
+                                const placeholder = img.parentElement?.querySelector('.image-placeholder');
+                                if (placeholder) {
+                                    placeholder.remove();
+                                }
+                                console.log('✅ 强制加载成功:', imageDataName);
+                            } else {
+                                console.error('❌ 强制加载失败，无法创建URL:', imageDataName);
+                            }
+                        }
+                    }
+                });
+            };
+
+            // 添加手动触发Observer的功能
+            window.testFolderObserverTrigger = function() {
+                console.log('🧪 手动测试文件夹Observer触发');
+                const folderImages = document.querySelectorAll('.folder-image img');
+
+                folderImages.forEach((img, index) => {
+                    console.log(`测试图片 ${index + 1}:`, img.dataset.debugName);
+
+                    // 手动调用IntersectionObserver回调
+                    const imageDataName = img.dataset.debugName;
+                    if (imageDataName) {
+                        const imageData = state.images.find(img => img.name === imageDataName);
+                        if (imageData) {
+                            console.log('手动触发Observer回调:', imageDataName);
+
+                            // 检查缓存中是否已有URL
+                            let imageUrl = imageData.url;
+                            if (!imageUrl) {
+                                imageUrl = getImageUrl(imageData.file);
+                                if (imageUrl) {
+                                    imageData.url = imageUrl;
+                                }
+                            }
+
+                            if (imageUrl) {
+                                img.src = imageUrl;
+                                const placeholder = img.parentElement?.querySelector('.image-placeholder');
+                                if (placeholder) {
+                                    placeholder.remove();
+                                }
+                                console.log('✅ 手动触发加载成功:', imageDataName);
+                            } else {
+                                console.error('❌ 手动触发失败，无URL:', imageDataName);
+                            }
+                        }
+                    }
+                });
+            };
+
+            // 添加Observer状态检查功能
+            window.checkObserverDetails = function() {
+                console.log('🔍 检查Observer详细信息:');
+                if (state.activeFolderObservers && state.activeFolderObservers.length > 0) {
+                    state.activeFolderObservers.forEach((observer, index) => {
+                        console.log(`Observer ${index + 1}:`, {
+                            observing: observer ? observer.takeRecords().length : 'undefined',
+                            root: observer ? observer.root : 'undefined',
+                            rootMargin: observer ? observer.rootMargin : 'undefined',
+                            threshold: observer ? observer.thresholds : 'undefined'
+                        });
+                    });
+                } else {
+                    console.log('没有活跃的文件夹Observer');
+                }
+            };
         }
 
-        // 清理文件夹Observer
+        // 清理文件夹Observer - 重构为更安全的机制
         function cleanupFolderObservers() {
+            // 暂时停止观察所有元素，但不销毁Observer
+            if (state.folderImageObserver) {
+                try {
+                    // 获取当前正在观察的所有元素
+                    const observedElements = state.folderImageObserver.takeRecords();
+                    observedElements.forEach(entry => {
+                        state.folderImageObserver.unobserve(entry.target);
+                    });
+                    console.log('暂停文件夹图片Observer，观察元素数量:', observedElements.length);
+                } catch (error) {
+                    console.warn('暂停Observer时出错:', error);
+                    // 如果出错，重新创建Observer
+                    state.folderImageObserver = null;
+                }
+            }
+
             if (state.activeFolderObservers) {
                 state.activeFolderObservers.forEach(observer => {
-                    if (observer) observer.disconnect();
+                    if (observer && observer !== state.folderImageObserver) {
+                        observer.disconnect();
+                        console.log('清理文件夹Observer');
+                    }
                 });
                 state.activeFolderObservers = [];
             }
@@ -2184,6 +2326,15 @@
             previewImages.forEach((image, index) => {
                 const folderImage = createFolderImageOptimized(image, folderName);
                 imagesContainer.appendChild(folderImage);
+
+                // 直接加载文件夹预览图，不使用Observer（因为预览图数量有限）
+                setTimeout(() => {
+                    const img = folderImage.querySelector('img');
+                    const placeholder = folderImage.querySelector('.image-placeholder');
+                    if (img && placeholder) {
+                        loadFolderImageDirectly(img, placeholder, image);
+                    }
+                }, 0); // 使用setTimeout确保在下一个事件循环中执行，此时DOM已更新
             });
 
             // 如果还有更多图片，添加提示
@@ -2215,6 +2366,8 @@
 
         // 优化的文件夹图片创建函数 - 使用单个Observer
         function createFolderImageOptimized(image, folderName) {
+            console.log('🖼️ 开始创建文件夹预览图:', image.name, '文件夹:', folderName);
+
             const folderImage = document.createElement('div');
             folderImage.className = 'folder-image';
 
@@ -2229,65 +2382,174 @@
             img.dataset.fileKey = getImageKey(image.file);
             img.dataset.lazy = "true";
             img.alt = image.name;
+            img.dataset.debugName = image.name; // 添加调试信息
+            // 不设置初始src，让Observer来处理，避免立即触发onload
 
             img.onload = function() {
+                console.log('✅ 文件夹预览图加载成功:', image.name);
                 placeholder.remove();
             };
 
             img.onerror = function() {
+                console.error('❌ 文件夹预览图加载失败:', image.name);
                 placeholder.innerHTML = '❌';
             };
 
             folderImage.appendChild(img);
 
-            // 使用统一的Observer进行懒加载
-            setupFolderImageLazyLoad(img, placeholder, image);
-
+            console.log('✅ 文件夹预览图元素创建完成:', image.name);
             return folderImage;
         }
 
-        // 统一的文件夹图片懒加载Observer
-        function setupFolderImageLazyLoad(img, placeholder, imageData) {
-            // 创建单个全局Observer用于所有文件夹图片
-            if (!state.folderImageObserver) {
-                state.folderImageObserver = new IntersectionObserver((entries) => {
-                    entries.forEach(entry => {
-                        if (entry.isIntersecting) {
-                            const targetImg = entry.target;
-                            const targetPlaceholder = targetImg.previousSibling;
+        // 文件夹图片直接加载函数 - 绕过Observer，直接加载图片
+        function loadFolderImageDirectly(img, placeholder, imageData) {
+            console.log('🚀 直接加载文件夹预览图:', imageData.name);
 
-                            // 检查缓存中是否已有URL
-                            let imageUrl = imageData.url;
-                            if (!imageUrl) {
-                                imageUrl = getImageUrl(imageData.file);
-                                if (imageUrl) {
-                                    imageData.url = imageUrl;
-                                }
-                            }
-
-                            if (imageUrl) {
-                                targetImg.src = imageUrl;
-                                targetPlaceholder.remove();
-                            } else {
-                                targetPlaceholder.innerHTML = '❌';
-                            }
-
-                            // 停止观察此图片
-                            state.folderImageObserver.unobserve(targetImg);
-                        }
-                    });
-                }, {
-                    root: null,
-                    rootMargin: '50px', // 减少预加载距离
-                    threshold: 0.1
-                });
-
-                // 保存Observer以便清理
-                state.activeFolderObservers.push(state.folderImageObserver);
+            // 检查缓存中是否已有URL
+            let imageUrl = imageData.url;
+            if (!imageUrl) {
+                console.log('📸 从文件创建URL:', imageData.name);
+                imageUrl = getImageUrl(imageData.file);
+                if (imageUrl) {
+                    imageData.url = imageUrl;
+                    console.log('✅ URL创建成功:', imageUrl);
+                } else {
+                    console.error('❌ URL创建失败:', imageData.name);
+                    placeholder.innerHTML = '❌';
+                    return;
+                }
+            } else {
+                console.log('📋 使用缓存URL:', imageUrl);
             }
 
-            // 观察当前图片
-            state.folderImageObserver.observe(img);
+            if (imageUrl) {
+                img.src = imageUrl;
+                img.onload = function() {
+                    console.log('✅ 文件夹预览图加载成功:', imageData.name);
+                    if (placeholder && placeholder.parentNode) {
+                        placeholder.remove();
+                    }
+                };
+
+                img.onerror = function() {
+                    console.error('❌ 文件夹预览图加载失败:', imageData.name);
+                    if (placeholder) {
+                        placeholder.innerHTML = '❌';
+                    }
+                };
+            }
+        }
+
+        // 文件夹图片懒加载Observer - 完全重新设计，确保可靠性
+        function setupFolderImageLazyLoad(img, placeholder, imageData) {
+            console.log('🎯 开始为文件夹图片设置Observer:', imageData.name, 'DOM元素:', img);
+
+            // 为每张图片创建独立的Observer，避免共享Observer的问题
+            const individualObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const targetImg = entry.target;
+
+                        console.log('👁️ 文件夹图片进入视口，开始加载:', imageData.name, '目标图片:', targetImg.dataset.debugName);
+
+                        // 验证图片元素是否还在DOM中
+                        if (!document.contains(targetImg)) {
+                            console.warn('⚠️ 图片元素已不在DOM中，跳过加载:', imageData.name);
+                            return;
+                        }
+
+                        // 检查缓存中是否已有URL
+                        let imageUrl = imageData.url;
+                        if (!imageUrl) {
+                            console.log('📸 从文件创建URL:', imageData.name);
+                            imageUrl = getImageUrl(imageData.file);
+                            if (imageUrl) {
+                                imageData.url = imageUrl;
+                                console.log('✅ URL创建成功:', imageUrl);
+                            } else {
+                                console.error('❌ URL创建失败:', imageData.name);
+                            }
+                        } else {
+                            console.log('📋 使用缓存URL:', imageUrl);
+                        }
+
+                        // 更安全的占位符查找方式
+                        let targetPlaceholder = placeholder;
+                        if (!targetPlaceholder) {
+                            // 方法1：通过previousSibling查找
+                            if (targetImg.previousSibling && targetImg.previousSibling.classList && targetImg.previousSibling.classList.contains('image-placeholder')) {
+                                targetPlaceholder = targetImg.previousSibling;
+                                console.log('🔍 通过previousSibling找到占位符');
+                            } else {
+                                // 方法2：通过父元素查找
+                                const parentElement = targetImg.parentElement;
+                                if (parentElement) {
+                                    targetPlaceholder = parentElement.querySelector('.image-placeholder');
+                                    if (targetPlaceholder) {
+                                        console.log('🔍 通过父元素找到占位符');
+                                    }
+                                }
+                            }
+                        } else {
+                            console.log('🔍 使用传入的占位符引用');
+                        }
+
+                        if (!targetPlaceholder) {
+                            console.warn('⚠️ 找不到占位符元素:', imageData.name);
+                        }
+
+                        if (imageUrl) {
+                            console.log('🚀 设置图片src:', imageData.name);
+                            targetImg.src = imageUrl;
+                            if (targetPlaceholder) {
+                                targetPlaceholder.remove();
+                            }
+                            console.log('✅ 文件夹图片加载成功:', imageData.name);
+                        } else {
+                            if (targetPlaceholder) {
+                                targetPlaceholder.innerHTML = '❌';
+                            }
+                            console.warn('❌ 文件夹图片加载失败，无URL:', imageData.name);
+                        }
+
+                        // 停止观察并清理Observer
+                        individualObserver.unobserve(targetImg);
+                        individualObserver.disconnect();
+
+                        // 从全局列表中移除
+                        const index = state.activeFolderObservers.indexOf(individualObserver);
+                        if (index > -1) {
+                            state.activeFolderObservers.splice(index, 1);
+                        }
+                        console.log('🧹 Observer已清理，剩余Observer数量:', state.activeFolderObservers.length);
+                    }
+                });
+            }, {
+                root: null,
+                rootMargin: '1000px', // 进一步增加预加载距离
+                threshold: 0.001  // 进一步降低阈值，确保极易触发
+            });
+
+            // 保存Observer到全局列表以便清理
+            if (!state.activeFolderObservers) {
+                state.activeFolderObservers = [];
+            }
+            state.activeFolderObservers.push(individualObserver);
+            console.log('📝 Observer已添加到全局列表，总数:', state.activeFolderObservers.length);
+
+            // 开始观察图片
+            try {
+                individualObserver.observe(img);
+                console.log('👀 开始观察文件夹图片:', imageData.name);
+            } catch (error) {
+                console.error('💥 创建文件夹图片Observer失败:', error);
+                // 清理失败的Observer
+                individualObserver.disconnect();
+                const index = state.activeFolderObservers.indexOf(individualObserver);
+                if (index > -1) {
+                    state.activeFolderObservers.splice(index, 1);
+                }
+            }
         }
 
         // 创建文件夹项元素
@@ -2329,6 +2591,15 @@
             previewImages.forEach((image, index) => {
                 const folderImage = createFolderImage(image, folderName);
                 imagesContainer.appendChild(folderImage);
+
+                // 直接加载文件夹预览图，不使用Observer（因为预览图数量有限）
+                setTimeout(() => {
+                    const img = folderImage.querySelector('img');
+                    const placeholder = folderImage.querySelector('.image-placeholder');
+                    if (img && placeholder) {
+                        loadFolderImageDirectly(img, placeholder, image);
+                    }
+                }, 0); // 使用setTimeout确保在下一个事件循环中执行，此时DOM已更新
             });
 
             // 如果还有更多图片，添加提示
@@ -2398,8 +2669,7 @@
 
             folderImage.appendChild(img);
 
-            // 设置懒加载
-            setupLazyLoadForImage(img, placeholder, image);
+            // 不在内部设置懒加载，让调用方在DOM插入后设置文件夹专用的Observer
 
             return folderImage;
         }
