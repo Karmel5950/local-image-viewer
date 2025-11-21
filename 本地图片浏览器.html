@@ -601,6 +601,62 @@
             transform: translateY(-3px);
             box-shadow: 0 6px 16px rgba(93, 125, 185, 0.4);
         }
+
+        /* 图片加载占位符样式 */
+        .image-placeholder {
+            width: 100% !important;
+            background: #f0f4f8;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #999;
+            font-size: 0.9rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 网格视图占位符 */
+        .masonry-grid .image-placeholder {
+            aspect-ratio: 3/4;
+            min-height: 200px;
+        }
+
+        /* 条漫视图占位符 */
+        .comic-view .image-placeholder {
+            max-width: 800px !important;
+            margin: 0 auto 20px auto !important;
+            min-height: 400px;
+        }
+
+        /* 文件夹视图占位符 */
+        .folder-view .folder-image .image-placeholder {
+            aspect-ratio: 1;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 占位符动画效果 */
+        .image-placeholder::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(
+                to right,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(255, 255, 255, 0.2) 50%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            100% {
+                left: 100%;
+            }
+        }
     </style>
 </head>
 <body>
@@ -706,10 +762,12 @@
             itemsPerPage: 20, // 增加每页显示数量，减少频繁加载
             fullscreenIndex: 0,
             urlCache: new Map(), // 缓存URL对象
+            urlCreationTime: new Map(), // 记录URL创建时间，用于安全清理
             loadedImages: new Set(), // 记录已加载的图片
             folderCache: new Map(), // 缓存文件夹分组数据
             isViewSwitching: false, // 视图切换标识
-            maxCacheSize: 100, // 最大缓存图片数量
+            maxCacheSize: 300, // 最大缓存数量
+            urlRevokeDelay: 30000, // 30秒未使用则清理
             memoryWarningThreshold: 500, // 内存警告阈值（MB）
             lazyLoadEnabled: true, // 启用懒加载
             timers: [], // 定时器管理数组
@@ -769,6 +827,9 @@
             state.isLoading = false; // 添加加载状态标识
             renderImages();
             setupEventListeners();
+
+            // 初始化懒加载
+            initLazyLoad();
 
             // 页面卸载时清理资源
             window.addEventListener('beforeunload', cleanupResources);
@@ -869,6 +930,7 @@
         // 清理资源
         function cleanupResources() {
             clearUrlCache();
+            state.urlCreationTime.clear(); // 清理URL创建时间记录
             state.folderCache.clear();
             state.loadedImages.clear();
 
@@ -957,7 +1019,15 @@
             }
 
             const toCleanup = state.urlCache.size - state.maxCacheSize + 10; // 多清理一些，避免频繁清理
-            const keysToRemove = Array.from(state.urlCache.keys()).slice(0, toCleanup);
+
+            // 按创建时间排序，优先清理最旧的URL
+            const keysWithTime = Array.from(state.urlCache.keys()).map(key => ({
+                key,
+                creationTime: state.urlCreationTime.get(key) || 0
+            }));
+
+            keysWithTime.sort((a, b) => a.creationTime - b.creationTime);
+            const keysToRemove = keysWithTime.slice(0, toCleanup).map(item => item.key);
 
             console.log(`🧹 LRU清理: 准备清理 ${keysToRemove.length} 个旧URL`);
 
@@ -968,6 +1038,7 @@
                         URL.revokeObjectURL(url);
                     }
                     state.urlCache.delete(key);
+                    state.urlCreationTime.delete(key); // 同时清理时间记录
                 } catch (e) {
                     console.warn('清理旧URL失败:', e, key);
                 }
@@ -977,50 +1048,59 @@
             checkMemoryUsage();
         }
 
-        // 清理未使用的URL - 改进版本
+        // 清理未使用的URL - 优化版本
         function cleanupUnusedUrls() {
-            // 获取当前页面中实际使用的图片
-            const currentImages = document.querySelectorAll('img[data-src], img[src]');
-            const usedUrls = new Set();
+            const now = Date.now();
+            const keys = Array.from(state.urlCache.keys());
+            const usedKeys = new Set();
 
-            currentImages.forEach(img => {
-                if (img.dataset.src) {
-                    usedUrls.add(img.dataset.src);
-                }
-                if (img.src && !img.src.startsWith('data:image/svg+xml') && img.src.startsWith('blob:')) {
-                    usedUrls.add(img.src);
+            // 收集当前可见的图片key
+            document.querySelectorAll('img:not([data-lazy="true"])').forEach(img => {
+                if (img.dataset.fileKey) {
+                    usedKeys.add(img.dataset.fileKey);
                 }
             });
 
-            // 安全清理：只清理确认不再使用的URL，并延迟清理
-            const urlsToRevoke = [];
-            for (const [key, url] of state.urlCache.entries()) {
-                if (!usedUrls.has(url)) {
-                    urlsToRevoke.push({ key, url });
-                }
+            // 收集全屏显示的图片key
+            const fullscreenImg = document.getElementById('fullscreenImage');
+            if (fullscreenImg && fullscreenImg.dataset.fileKey) {
+                usedKeys.add(fullscreenImg.dataset.fileKey);
             }
 
-            // 延迟清理，确保正在加载的图片不会被中断
-            managedSetTimeout(() => {
-                urlsToRevoke.forEach(({ key, url }) => {
-                    try {
-                        URL.revokeObjectURL(url);
-                        state.urlCache.delete(key);
-                    } catch (e) {
-                        console.warn('清理URL失败:', e);
-                    }
-                });
-                console.log(`安全清理了 ${urlsToRevoke.length} 个URL，当前缓存 ${state.urlCache.size} 个`);
-                checkMemoryUsage();
-            }, 5000); // 5秒延迟清理
+            // 优先移除超过缓存大小的未使用URL
+            if (keys.length > state.maxCacheSize) {
+                // 按创建时间排序，先清理最早的
+                keys.sort((a, b) => state.urlCreationTime.get(a) - state.urlCreationTime.get(b))
+                    .forEach(key => {
+                        if (!usedKeys.has(key) && keys.length > state.maxCacheSize) {
+                            URL.revokeObjectURL(state.urlCache.get(key));
+                            state.urlCache.delete(key);
+                            state.urlCreationTime.delete(key);
+                        }
+                    });
+            }
+
+            // 清理过期未使用的URL
+            keys.forEach(key => {
+                if (!usedKeys.has(key) && now - state.urlCreationTime.get(key) > state.urlRevokeDelay) {
+                    URL.revokeObjectURL(state.urlCache.get(key));
+                    state.urlCache.delete(key);
+                    state.urlCreationTime.delete(key);
+                }
+            });
         }
 
         // 清理URL缓存
         function clearUrlCache() {
             state.urlCache.forEach((url, key) => {
-                URL.revokeObjectURL(url);
+                try {
+                    URL.revokeObjectURL(url);
+                } catch (e) {
+                    console.warn('清理URL时出错:', e);
+                }
             });
             state.urlCache.clear();
+            state.urlCreationTime.clear(); // 同时清理创建时间记录
         }
 
         // 获取或创建图片URL - 按需加载版本
@@ -1060,9 +1140,12 @@
                     throw new Error('创建blob URL失败');
                 }
 
-                // 添加到缓存
+                // 记录创建时间
+                const currentTime = Date.now();
                 state.urlCache.set(fileKey, url);
-                console.log('✅ 成功创建图片URL:', file.name);
+                state.urlCreationTime.set(fileKey, currentTime);
+
+                console.log('✅ 成功创建图片URL:', file.name, '创建时间:', currentTime);
 
                 // 检查是否需要清理旧缓存
                 if (state.urlCache.size > state.maxCacheSize) {
@@ -1075,6 +1158,82 @@
                 console.error('❌ 创建图片URL失败:', file.name, error);
                 return null;
             }
+        }
+
+        // 生成图片唯一标识
+        function getImageKey(file) {
+            return `${file.name}_${file.size}_${file.lastModified}`;
+        }
+
+        // 延迟加载图片实现
+        function lazyLoadImage(img) {
+            if (img.dataset.lazy === "false" || img.classList.contains('loaded')) return;
+
+            const key = img.dataset.fileKey;
+            if (!key) return;
+
+            // 查找对应的图片文件
+            const image = state.images.find(img => getImageKey(img.file) === key);
+            if (!image) return;
+
+            // 从缓存获取或创建URL
+            if (state.urlCache.has(key)) {
+                img.src = state.urlCache.get(key);
+                state.urlCreationTime.set(key, Date.now());
+            } else {
+                const url = URL.createObjectURL(image.file);
+                img.src = url;
+                state.urlCache.set(key, url);
+                state.urlCreationTime.set(key, Date.now());
+            }
+
+            img.dataset.lazy = "false";
+        }
+
+        // 检查并加载视口中的图片
+        function checkLazyLoad() {
+            const lazyImages = document.querySelectorAll('img[data-lazy="true"]');
+
+            lazyImages.forEach(img => {
+                const rect = img.getBoundingClientRect();
+                // 当图片进入视口或在视口附近时加载
+                if (rect.top < window.innerHeight + 500 && rect.bottom > -200) {
+                    lazyLoadImage(img);
+                }
+            });
+
+            // 清理长时间未使用的URL
+            cleanupUnusedUrls();
+        }
+
+        // 初始化懒加载监听
+        function initLazyLoad() {
+            // 初始加载可见区域图片
+            checkLazyLoad();
+
+            // 滚动时检查
+            window.addEventListener('scroll', throttle(checkLazyLoad, 200));
+
+            // 视图切换时检查
+            ['gridViewBtn', 'folderViewBtn', 'comicViewBtn'].forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    btn.addEventListener('click', () => {
+                        setTimeout(checkLazyLoad, 100);
+                    });
+                }
+            });
+        }
+
+        // 节流函数，优化滚动性能
+        function throttle(func, delay) {
+            let lastCall = 0;
+            return function(...args) {
+                const now = new Date().getTime();
+                if (now - lastCall < delay) return;
+                lastCall = now;
+                return func(...args);
+            };
         }
 
         // 格式化文件大小
@@ -1288,10 +1447,13 @@
                 }
             }
 
-            // 清理之前的URL缓存
-            clearUrlCache();
-            state.folderCache.clear();
-            state.loadedImages.clear();
+            // 安全清理之前的URL缓存 - 增加延迟避免中断正在显示的图片
+            managedSetTimeout(() => {
+                clearUrlCache();
+                state.folderCache.clear();
+                state.loadedImages.clear();
+                console.log('✅ 已清理旧的图片缓存，准备加载新文件夹');
+            }, 100);
 
             elements.searchInput.disabled = false;
             elements.sortSelect.disabled = false;
@@ -1596,7 +1758,8 @@
         function renderImages() {
             // 保存当前滚动位置
             const scrollPosition = window.scrollY;
-            const isNearBottom = isScrolledToBottom();
+            const scrollThreshold = 200; // 增加阈值，避免误判
+            const isNearBottom = (window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - scrollThreshold;
 
             // 文件夹视图的特殊处理
             if (state.currentView === 'folder') {
@@ -1614,7 +1777,7 @@
                 elements.imageCount.textContent = state.images.length;
 
                 requestAnimationFrame(() => {
-                    renderFolderView(state.images);
+                    renderFolderView(state.images, scrollPosition, isNearBottom);
                 });
                 return;
             }
@@ -1636,20 +1799,20 @@
             // 使用requestAnimationFrame优化渲染时机
             requestAnimationFrame(() => {
                 if (state.currentView === 'grid') {
-                    renderGridView(visibleImages);
+                    renderGridView(visibleImages, scrollPosition, isNearBottom);
                 } else if (state.currentView === 'comic') {
-                    renderComicView(visibleImages);
+                    renderComicView(visibleImages, scrollPosition, isNearBottom);
                 } else {
                     // 兜底处理：如果状态不匹配，强制切换到网格视图
                     console.warn('意外的视图状态:', state.currentView, '强制切换到网格视图');
                     state.currentView = 'grid';
-                    renderGridView(visibleImages);
+                    renderGridView(visibleImages, scrollPosition, isNearBottom);
                 }
             });
         }
 
         // 优化的网格视图渲染
-        function renderGridView(images) {
+        function renderGridView(images, scrollPosition, isNearBottom) {
             // 使用DocumentFragment批量操作DOM
             const fragment = document.createDocumentFragment();
 
@@ -1669,150 +1832,92 @@
             elements.comicView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
 
-            // 恢复滚动位置（防止页面跳跃）
+            // 更精确的滚动位置恢复逻辑
             requestAnimationFrame(() => {
-                if (!isNearBottom) {
-                    // 只有不在底部时才恢复滚动位置
-                    window.scrollTo(0, scrollPosition);
+                // 获取新的页面高度
+                const newPageHeight = document.documentElement.scrollHeight;
+
+                // 只有在以下情况下才恢复滚动位置：
+                // 1. 不在底部（有足够的下方空间）
+                // 2. 新页面高度大于原来的滚动位置（避免无效滚动）
+                if (!isNearBottom && newPageHeight > scrollPosition) {
+                    window.scrollTo({
+                        top: scrollPosition,
+                        left: 0,
+                        behavior: 'instant' // 使用instant避免动画跳跃
+                    });
+                    console.log('网格视图滚动位置已恢复:', scrollPosition);
                 }
-                console.log('滚动位置已恢复，防止页面跳跃');
             });
         }
 
-        // 懒加载图片项元素创建
-        function createImageItem(image) {
-            const imageItem = document.createElement('div');
-            imageItem.className = 'image-item';
+        // 创建图片项（带占位符）
+        function createImageItem(image, viewType = 'grid') {
+            const item = document.createElement('div');
+            item.className = 'image-item';
+            item.dataset.fileKey = getImageKey(image.file);
 
-            // 创建占位符元素
+            // 创建占位符
             const placeholder = document.createElement('div');
-            placeholder.style.cssText = `
-                width: 100%;
-                min-height: 200px;
-                background: linear-gradient(45deg, #f0f0f0 25%, #e0e0e0 25%, #e0e0e0 50%, #f0f0f0 50%, #f0f0f0 75%, #e0e0e0 75%, #e0e0e0);
-                background-size: 20px 20px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: #666;
-                font-size: 0.9rem;
-                border-radius: 4px;
-                padding: 20px;
-                box-sizing: border-box;
-            `;
-            placeholder.innerHTML = `
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; margin-bottom: 8px;">📷</div>
-                    <div style="word-break: break-all;">${image.name}</div>
-                </div>
-            `;
+            placeholder.className = 'image-placeholder';
+            placeholder.textContent = '加载中...';
+            item.appendChild(placeholder);
 
-            // 创建图片元素，但不立即加载
+            // 创建图片元素
             const img = document.createElement('img');
+            img.dataset.fileKey = getImageKey(image.file);
+            img.dataset.lazy = "true";
             img.alt = image.name;
-            img.dataset.fileKey = image.fileKey; // 使用fileKey作为唯一标识
-            img.dataset.lazy = 'true'; // 标记为懒加载
-            img.style.cssText = `
-                cursor: pointer;
-                transition: opacity 0.3s, transform 0.3s;
-                opacity: 0;
-                width: 100%;
-                height: auto;
-                display: block;
-                border-radius: 4px;
+
+            // 图片加载完成后移除占位符
+            img.onload = function() {
+                placeholder.remove();
+                img.classList.add('loaded');
+            };
+
+            // 图片加载失败时重试
+            img.onerror = function() {
+                setTimeout(() => {
+                    const key = img.dataset.fileKey;
+                    if (key && state.urlCache.has(key)) {
+                        img.src = state.urlCache.get(key);
+                    }
+                }, 1000);
+            };
+
+            item.appendChild(img);
+
+            // 添加图片信息
+            const info = document.createElement('div');
+            info.className = 'image-info';
+            info.innerHTML = `
+                <div class="image-name">${image.name}</div>
+                <div class="image-path">${image.path}</div>
             `;
+            item.appendChild(info);
 
-            // 设置图片容器
-            const imgContainer = document.createElement('div');
-            imgContainer.style.cssText = `
-                position: relative;
-                width: 100%;
-                overflow: hidden;
-                border-radius: 4px;
-            `;
-
-            imgContainer.appendChild(placeholder);
-            imgContainer.appendChild(img);
-
-            // 添加加载成功事件
-            img.addEventListener('load', function() {
-                console.log('🖼️ 图片懒加载成功:', image.name);
-                this.style.opacity = '1';
-
-                // 图片加载完成后移除占位符
-                if (placeholder && placeholder.parentNode) {
-                    placeholder.remove();
-                }
-
-                // 添加到已加载集合
-                state.loadedImages.add(image.fileKey);
-            });
-
-            // 添加加载错误处理
-            img.addEventListener('error', function() {
-                console.error('❌ 图片懒加载失败:', image.name);
-                placeholder.innerHTML = `
-                    <div style="text-align: center; color: #ff6b6b;">
-                        <div style="font-size: 2rem; margin-bottom: 8px;">⚠️</div>
-                        <div>加载失败</div>
-                        <div style="font-size: 0.8rem; margin-top: 4px;">${image.name}</div>
-                    </div>
-                `;
-            });
-
-            // 设置懒加载触发
-            setupLazyLoadForImage(img, placeholder, image);
-
-            // 添加鼠标悬停效果
-            img.addEventListener('mouseenter', function() {
-                if (this.style.opacity === '1') {
-                    this.style.transform = 'scale(1.03)';
-                }
-            });
-
-            img.addEventListener('mouseleave', function() {
-                this.style.transform = 'scale(1)';
-            });
-
-            // 添加点击事件
-            img.addEventListener('click', () => {
-                const actualIndex = state.filteredImages.findIndex(item => item.fileKey === image.fileKey);
+            // 点击图片打开全屏
+            img.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const actualIndex = state.filteredImages.findIndex(item => item.fileKey === getImageKey(image.file));
                 if (actualIndex !== -1) {
                     openFullscreen(actualIndex);
-                } else {
-                    console.error('无法找到图片的索引:', image.fileKey);
                 }
             });
 
             // 占位符也可以点击
-            if (placeholder) {
-                placeholder.addEventListener('click', () => {
-                    const actualIndex = state.filteredImages.findIndex(item => item.fileKey === image.fileKey);
-                    if (actualIndex !== -1) {
-                        openFullscreen(actualIndex);
-                    }
-                });
-            }
+            placeholder.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const actualIndex = state.filteredImages.findIndex(item => item.fileKey === getImageKey(image.file));
+                if (actualIndex !== -1) {
+                    openFullscreen(actualIndex);
+                }
+            });
 
-            // 创建图片信息
-            const imageInfo = document.createElement('div');
-            imageInfo.className = 'image-info';
+            // 设置懒加载
+            setupLazyLoadForImage(img, placeholder, image);
 
-            const imageName = document.createElement('div');
-            imageName.className = 'image-name';
-            imageName.textContent = image.name;
-
-            const imagePath = document.createElement('div');
-            imagePath.className = 'image-path';
-            imagePath.textContent = image.path;
-
-            imageInfo.appendChild(imageName);
-            imageInfo.appendChild(imagePath);
-
-            imageItem.appendChild(imgContainer);
-            imageItem.appendChild(imageInfo);
-
-            return imageItem;
+            return item;
         }
 
         // 设置单个图片的懒加载
@@ -1879,11 +1984,7 @@
         }
     
         // 优化的条漫视图渲染
-        function renderComicView(images) {
-            // 保存当前滚动位置
-            const scrollPosition = window.scrollY;
-            const isNearBottom = isScrolledToBottom();
-
+        function renderComicView(images, scrollPosition, isNearBottom) {
             const fragment = document.createDocumentFragment();
 
             // 为每个图片创建元素，过滤掉无效的图片项
@@ -1901,18 +2002,27 @@
             elements.masonryView.classList.add('hidden');
             elements.folderView.classList.add('hidden');
 
-            // 恢复滚动位置（防止页面跳跃）
+            // 更精确的滚动位置恢复逻辑
             requestAnimationFrame(() => {
-                if (!isNearBottom) {
-                    // 只有不在底部时才恢复滚动位置
-                    window.scrollTo(0, scrollPosition);
+                // 获取新的页面高度
+                const newPageHeight = document.documentElement.scrollHeight;
+
+                // 只有在以下情况下才恢复滚动位置：
+                // 1. 不在底部（有足够的下方空间）
+                // 2. 新页面高度大于原来的滚动位置（避免无效滚动）
+                if (!isNearBottom && newPageHeight > scrollPosition) {
+                    window.scrollTo({
+                        top: scrollPosition,
+                        left: 0,
+                        behavior: 'instant' // 使用instant避免动画跳跃
+                    });
+                    console.log('条漫视图滚动位置已恢复:', scrollPosition);
                 }
-                console.log('条漫视图滚动位置已恢复，防止页面跳跃');
             });
         }
 
         // 优化的文件夹视图渲染
-        function renderFolderView(images) {
+        function renderFolderView(images, scrollPosition, isNearBottom) {
             console.log('renderFolderView被调用，传入图片数量:', images.length);
 
             // 使用缓存的文件夹数据，避免重复计算
@@ -1968,6 +2078,24 @@
             elements.folderView.style.display = 'block';
             elements.masonryView.classList.add('hidden');
             elements.comicView.classList.add('hidden');
+
+            // 文件夹视图也需要恢复滚动位置
+            requestAnimationFrame(() => {
+                // 获取新的页面高度
+                const newPageHeight = document.documentElement.scrollHeight;
+
+                // 只有在以下情况下才恢复滚动位置：
+                // 1. 不在底部（有足够的下方空间）
+                // 2. 新页面高度大于原来的滚动位置（避免无效滚动）
+                if (!isNearBottom && newPageHeight > scrollPosition) {
+                    window.scrollTo({
+                        top: scrollPosition,
+                        left: 0,
+                        behavior: 'instant' // 使用instant避免动画跳跃
+                    });
+                    console.log('文件夹视图滚动位置已恢复:', scrollPosition);
+                }
+            });
 
             console.log('文件夹视图渲染完成');
         }
@@ -2058,75 +2186,44 @@
             const folderImage = document.createElement('div');
             folderImage.className = 'folder-image';
 
-            // 创建占位符
+            // 添加占位符
             const placeholder = document.createElement('div');
-            placeholder.style.cssText = `
-                width: 100%;
-                height: 100%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                background: linear-gradient(45deg, #f0f0f0 25%, #e0e0e0 25%, #e0e0e0 50%, #f0f0f0 50%, #f0f0f0 75%, #e0e0e0 75%, #e0e0e0);
-                background-size: 10px 10px;
-                color: #666;
-                font-size: 0.8rem;
-            `;
-            placeholder.innerHTML = '📷';
-
-            const img = document.createElement('img');
-            img.alt = image.name;
-            img.style.cssText = `
-                cursor: pointer;
-                transition: all 0.3s;
-                opacity: 0;
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            `;
-
-            // 设置容器为相对定位
-            folderImage.style.position = 'relative';
+            placeholder.className = 'image-placeholder';
+            placeholder.textContent = '加载中...';
             folderImage.appendChild(placeholder);
-            folderImage.appendChild(img);
 
-            // 添加加载事件
-            img.addEventListener('load', function() {
-                this.style.opacity = '1';
-                placeholder.style.display = 'none';
-            });
+            // 添加图片
+            const img = document.createElement('img');
+            img.dataset.fileKey = getImageKey(image.file);
+            img.dataset.lazy = "true";
+            img.alt = image.name;
 
-            img.addEventListener('error', function() {
-                this.onerror = null;
-                console.error('文件夹预览图片加载失败:', image.name);
-                placeholder.innerHTML = '⚠️';
-                placeholder.style.color = '#ff6b6b';
-            });
+            img.onload = function() {
+                placeholder.remove();
+            };
 
-            // 设置懒加载
-            setupLazyLoadForImage(img, placeholder, image);
+            img.onerror = function() {
+                setTimeout(() => {
+                    const key = img.dataset.fileKey;
+                    if (key && state.urlCache.has(key)) {
+                        img.src = state.urlCache.get(key);
+                    }
+                }, 1000);
+            };
 
-            // 添加悬停效果
-            img.addEventListener('mouseenter', function() {
-                this.style.transform = 'scale(1.1)';
-            });
-
-            img.addEventListener('mouseleave', function() {
-                this.style.transform = 'scale(1)';
-            });
-
-            // 绑定点击事件
             img.addEventListener('click', (e) => {
-                e.stopPropagation(); // 防止冒泡触发 header 的点击
-                const globalIndex = state.filteredImages.findIndex(item => item.fileKey === image.fileKey);
+                e.stopPropagation();
+                const globalIndex = state.filteredImages.findIndex(item => item.fileKey === getImageKey(image.file));
                 if (globalIndex !== -1) {
                     openFullscreen(globalIndex);
                 }
             });
 
             folderImage.appendChild(img);
+
+            // 设置懒加载
+            setupLazyLoadForImage(img, placeholder, image);
+
             return folderImage;
         }
 
@@ -2136,23 +2233,48 @@
             resetZoom();
             document.body.classList.add('fullscreen-active');
 
-            // 按需创建或获取图片URL
-            let imageUrl = image.url;
-            if (!imageUrl) {
-                imageUrl = getImageUrl(image.file);
-                if (imageUrl) {
-                    image.url = imageUrl; // 更新缓存
-                }
+            // 显示加载状态
+            elements.fullscreenImage.style.opacity = "0.5";
+
+            // 设置图片信息
+            elements.fullscreenCaption.textContent = `${image.name} (${index + 1}/${state.filteredImages.length})`;
+
+            // 加载图片
+            const key = getImageKey(image.file);
+            elements.fullscreenImage.dataset.fileKey = key;
+
+            if (state.urlCache.has(key)) {
+                elements.fullscreenImage.src = state.urlCache.get(key);
+                state.urlCreationTime.set(key, Date.now());
+            } else {
+                const url = URL.createObjectURL(image.file);
+                elements.fullscreenImage.src = url;
+                state.urlCache.set(key, url);
+                state.urlCreationTime.set(key, Date.now());
             }
 
-            if (imageUrl) {
-                elements.fullscreenImage.src = imageUrl;
-                elements.fullscreenCaption.textContent = `${image.name} (${image.path})`;
-                elements.fullscreenOverlay.style.display = 'flex';
-            } else {
-                alert('无法加载图片，请刷新页面重试');
-                closeFullscreen();
-            }
+            // 图片加载完成
+            elements.fullscreenImage.onload = function() {
+                elements.fullscreenImage.style.opacity = "1";
+                resetZoom();
+            };
+
+            // 图片加载失败重试
+            elements.fullscreenImage.onerror = function() {
+                setTimeout(() => {
+                    if (state.urlCache.has(key)) {
+                        elements.fullscreenImage.src = state.urlCache.get(key);
+                    } else {
+                        const url = URL.createObjectURL(image.file);
+                        elements.fullscreenImage.src = url;
+                        state.urlCache.set(key, url);
+                        state.urlCreationTime.set(key, Date.now());
+                    }
+                }, 1000);
+            };
+
+            // 显示全屏
+            elements.fullscreenOverlay.style.display = 'flex';
 
             updateNavButtons();
         }
@@ -2429,7 +2551,16 @@
             }
         }
 
-        init();
+        // 页面卸载时清理所有URL
+    window.addEventListener('beforeunload', () => {
+        state.urlCache.forEach(url => {
+            URL.revokeObjectURL(url);
+        });
+        state.urlCache.clear();
+        state.urlCreationTime.clear();
+    });
+
+    init();
     </script>
 </body>
 </html>
